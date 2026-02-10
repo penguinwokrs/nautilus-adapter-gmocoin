@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and install package
+        run: |
+          pip install maturin
+          maturin build --release -i python3.12 --out dist
+          pip install dist/*.whl
+
+      - name: Install test dependencies
+        run: pip install pytest nautilus-trader
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
