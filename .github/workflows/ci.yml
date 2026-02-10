@@ -22,8 +22,7 @@ jobs:
       - name: Build and install package
         run: |
           pip install maturin
-          maturin build --release -i python3.12 --out dist
-          pip install dist/*.whl
+          maturin develop --release
 
       - name: Install test dependencies
         run: pip install pytest nautilus-trader
