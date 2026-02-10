@@ -17,9 +17,10 @@ from nautilus_trader.model.enums import (
     TimeInForce, LiquiditySide,
 )
 from nautilus_trader.execution.messages import SubmitOrder, CancelOrder, ModifyOrder
-from nautilus_trader.execution.reports import OrderStatusReport, FillReport
-from nautilus_trader.model.identifiers import TradeId
+from nautilus_trader.execution.reports import OrderStatusReport, FillReport, PositionStatusReport
+from nautilus_trader.model.identifiers import TradeId, PositionId
 from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.enums import PositionSide
 
 from .config import GmocoinExecClientConfig
 from .constants import NAUTILUS_TO_GMO_ORDER_TYPE, ORDER_STATUS_MAP, ORDER_TYPE_MAP, TIME_IN_FORCE_MAP
@@ -144,8 +145,20 @@ class GmocoinExecutionClient(LiveExecutionClient):
             amount = str(order.quantity)
             client_id = str(order.client_order_id)
 
+            # Extract tags for leverage parameters
+            settle_type = None
+            losscut_price = None
+            if hasattr(order, 'tags') and order.tags:
+                for tag in order.tags:
+                    tag_str = str(tag)
+                    if tag_str.startswith("settleType="):
+                        settle_type = tag_str.split("=", 1)[1]
+                    elif tag_str.startswith("losscutPrice="):
+                        losscut_price = tag_str.split("=", 1)[1]
+
             resp_json = await self._rust_client.submit_order(
-                gmo_symbol, amount, side, order_type, client_id, price, tif, None
+                gmo_symbol, amount, side, order_type, client_id, price, tif, None,
+                losscut_price, settle_type,
             )
 
             resp = json.loads(resp_json)
@@ -239,6 +252,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 self.create_task(self._process_order_update_from_data(venue_order_id, data))
             elif event_type == "AssetUpdate":
                 self._process_asset_update(data)
+            elif event_type == "PositionUpdate":
+                self.log.info(f"Received PositionUpdate via WS: positionId={data.get('positionId')}")
+            elif event_type == "PositionSummaryUpdate":
+                self.log.info(f"Received PositionSummaryUpdate via WS: symbol={data.get('symbol')}")
             else:
                 self.log.debug(f"Unknown WS Event: {event_type}")
         except Exception as e:
@@ -648,7 +665,59 @@ class GmocoinExecutionClient(LiveExecutionClient):
         return reports
 
     async def generate_position_status_reports(self, instrument_id=None):
-        return []
+        reports = []
+        try:
+            symbols = set()
+            if instrument_id:
+                symbols.add(instrument_id.symbol.value.split("/")[0])
+            else:
+                for inst in self._instrument_provider.get_all().values() if hasattr(self._instrument_provider.get_all, 'values') else self._instrument_provider.get_all():
+                    symbols.add(inst.id.symbol.value.split("/")[0])
+
+            if not symbols:
+                return reports
+
+            for symbol in symbols:
+                try:
+                    resp_json = await self._rust_client.get_open_positions(symbol)
+                    resp = json.loads(resp_json)
+                    pos_list = resp if isinstance(resp, list) else resp.get("list", [])
+
+                    for pos_data in pos_list:
+                        try:
+                            position_id = PositionId(str(pos_data.get("positionId")))
+                            side_str = pos_data.get("side", "BUY")
+                            position_side = PositionSide.LONG if side_str == "BUY" else PositionSide.SHORT
+
+                            size = Decimal(pos_data.get("size", "0"))
+                            avg_price = Decimal(pos_data.get("price", "0"))
+
+                            from nautilus_trader.model.identifiers import InstrumentId, Symbol
+                            inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+
+                            ts_now = self._clock.timestamp_ns()
+
+                            report = PositionStatusReport(
+                                account_id=self._account_id,
+                                instrument_id=inst_id,
+                                position_side=position_side,
+                                quantity=Quantity(size, precision=8),
+                                report_id=UUID4(),
+                                ts_last=ts_now,
+                                ts_init=ts_now,
+                            )
+                            reports.append(report)
+                        except Exception as e:
+                            self._logger.warning(f"Failed to parse position report: {e}")
+                            continue
+                except Exception as e:
+                    self._logger.warning(f"Failed to fetch positions for {symbol}: {e}")
+                    continue
+
+        except Exception as e:
+            self._logger.error(f"Failed to generate position status reports: {e}")
+
+        return reports
 
     async def _register_all_currencies(self):
         """Dynamically register all GMO Coin currencies to the InstrumentProvider."""

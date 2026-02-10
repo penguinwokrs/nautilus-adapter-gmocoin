@@ -7,6 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use url::Url;
 use pyo3::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::{info, warn, error};
 use crate::client::rest::GmocoinRestClient;
 use crate::model::order::Order;
 
@@ -73,6 +74,7 @@ impl GmocoinExecutionClient {
 
     // ========== Order Operations (Python) ==========
 
+    #[pyo3(signature = (symbol, amount, side, execution_type, client_order_id, price=None, time_in_force=None, cancel_before=None, losscut_price=None, settle_type=None))]
     pub fn submit_order(
         &self,
         py: Python,
@@ -84,6 +86,8 @@ impl GmocoinExecutionClient {
         price: Option<String>,
         time_in_force: Option<String>,
         cancel_before: Option<bool>,
+        losscut_price: Option<String>,
+        settle_type: Option<String>,
     ) -> PyResult<PyObject> {
         let rest_client = self.rest_client.clone();
         let client_oid_map_arc = self.client_oid_map.clone();
@@ -91,8 +95,10 @@ impl GmocoinExecutionClient {
         let future = async move {
             let price_ref = price.as_deref();
             let tif_ref = time_in_force.as_deref();
+            let lp_ref = losscut_price.as_deref();
+            let st_ref = settle_type.as_deref();
             let res = rest_client
-                .submit_order(&symbol, &side, &execution_type, &amount, price_ref, tif_ref, cancel_before)
+                .submit_order(&symbol, &side, &execution_type, &amount, price_ref, tif_ref, cancel_before, lp_ref, st_ref)
                 .await
                 .map_err(PyErr::from)?;
 
@@ -246,6 +252,52 @@ impl GmocoinExecutionClient {
     pub fn get_assets_py(&self, py: Python) -> PyResult<PyObject> {
         self.rest_client.get_assets_py(py)
     }
+
+    // ========== Position Operations (Python) ==========
+
+    pub fn get_margin_py(&self, py: Python) -> PyResult<PyObject> {
+        self.rest_client.get_margin_py(py)
+    }
+
+    pub fn get_open_positions(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+        self.rest_client.get_open_positions_py(py, symbol, page, count)
+    }
+
+    pub fn get_position_summary(&self, py: Python, symbol: Option<String>) -> PyResult<PyObject> {
+        self.rest_client.get_position_summary_py(py, symbol)
+    }
+
+    #[pyo3(signature = (symbol, side, execution_type, settle_position, price=None, time_in_force=None))]
+    pub fn close_order(
+        &self,
+        py: Python,
+        symbol: String,
+        side: String,
+        execution_type: String,
+        settle_position: Vec<(u64, String)>,
+        price: Option<String>,
+        time_in_force: Option<String>,
+    ) -> PyResult<PyObject> {
+        self.rest_client.post_close_order_py(py, symbol, side, execution_type, settle_position, price, time_in_force)
+    }
+
+    #[pyo3(signature = (symbol, side, execution_type, size, price=None, time_in_force=None))]
+    pub fn close_bulk_order(
+        &self,
+        py: Python,
+        symbol: String,
+        side: String,
+        execution_type: String,
+        size: String,
+        price: Option<String>,
+        time_in_force: Option<String>,
+    ) -> PyResult<PyObject> {
+        self.rest_client.post_close_bulk_order_py(py, symbol, side, execution_type, size, price, time_in_force)
+    }
+
+    pub fn change_losscut_price(&self, py: Python, position_id: u64, losscut_price: String) -> PyResult<PyObject> {
+        self.rest_client.put_losscut_price_py(py, position_id, losscut_price)
+    }
 }
 
 impl GmocoinExecutionClient {
@@ -265,21 +317,21 @@ impl GmocoinExecutionClient {
             let token = match rest_client.post_ws_auth().await {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("GMO: Failed to get Private WS auth token: {}. Retrying in {}s...", e, backoff_sec);
+                    error!("GMO: Failed to get Private WS auth token: {}. Retrying in {}s...", e, backoff_sec);
                     sleep(Duration::from_secs(backoff_sec)).await;
                     backoff_sec = (backoff_sec * 2).min(max_backoff);
                     continue;
                 }
             };
 
-            eprintln!("GMO: Got Private WS token");
+            info!("GMO: Got Private WS token");
 
             // 2. Connect to Private WS
             let ws_url = format!("wss://api.coin.z.com/ws/private/v1/{}", token);
             let url = match Url::parse(&ws_url) {
                 Ok(u) => u,
                 Err(e) => {
-                    eprintln!("GMO: Invalid Private WS URL: {}. Retrying in 5s...", e);
+                    error!("GMO: Invalid Private WS URL: {}. Retrying in 5s...", e);
                     sleep(Duration::from_secs(5)).await;
                     continue;
                 }
@@ -287,12 +339,12 @@ impl GmocoinExecutionClient {
 
             match connect_async(url).await {
                 Ok((mut ws, _)) => {
-                    eprintln!("GMO: Connected to Private WebSocket");
+                    info!("GMO: Connected to Private WebSocket");
                     backoff_sec = 5;
 
                     // Subscribe to execution and order events with rate limiting
                     let ws_sub_limiter = crate::rate_limit::TokenBucket::new(1.0, 0.5);
-                    let channels = vec!["executionEvents", "orderEvents"];
+                    let channels = vec!["executionEvents", "orderEvents", "positionEvents", "positionSummaryEvents"];
                     for ch in &channels {
                         ws_sub_limiter.acquire().await;
                         let sub_msg = serde_json::json!({
@@ -300,7 +352,7 @@ impl GmocoinExecutionClient {
                             "channel": ch,
                         });
                         if let Err(e) = ws.send(Message::Text(sub_msg.to_string())).await {
-                            eprintln!("GMO: Failed to subscribe to {}: {}", ch, e);
+                            error!("GMO: Failed to subscribe to {}: {}", ch, e);
                         }
                     }
 
@@ -318,10 +370,10 @@ impl GmocoinExecutionClient {
                         // Check if token needs refresh
                         if last_refresh.elapsed() >= refresh_interval {
                             if let Err(e) = rest_client.put_ws_auth(&token).await {
-                                eprintln!("GMO: Failed to extend Private WS token: {}. Reconnecting...", e);
+                                error!("GMO: Failed to extend Private WS token: {}. Reconnecting...", e);
                                 break;
                             }
-                            eprintln!("GMO: Extended Private WS token");
+                            info!("GMO: Extended Private WS token");
                             last_refresh = std::time::Instant::now();
                         }
 
@@ -333,15 +385,15 @@ impl GmocoinExecutionClient {
                                 let _ = ws.send(Message::Pong(data)).await;
                             }
                             Some(Ok(Message::Close(_))) => {
-                                eprintln!("GMO: Private WS closed by server");
+                                warn!("GMO: Private WS closed by server");
                                 break;
                             }
                             Some(Err(e)) => {
-                                eprintln!("GMO: Private WS error: {}", e);
+                                error!("GMO: Private WS error: {}", e);
                                 break;
                             }
                             None => {
-                                eprintln!("GMO: Private WS stream ended");
+                                warn!("GMO: Private WS stream ended");
                                 break;
                             }
                             _ => {}
@@ -349,7 +401,7 @@ impl GmocoinExecutionClient {
                     }
                 }
                 Err(e) => {
-                    eprintln!("GMO: Failed to connect Private WS: {}. Retrying in {}s...", e, backoff_sec);
+                    error!("GMO: Failed to connect Private WS: {}. Retrying in {}s...", e, backoff_sec);
                 }
             }
 
@@ -367,7 +419,7 @@ impl GmocoinExecutionClient {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(msg_json) {
             // Check for error responses
             if val.get("error").is_some() {
-                eprintln!("GMO: Private WS error response: {}", msg_json);
+                warn!("GMO: Private WS error response: {}", msg_json);
                 return;
             }
 

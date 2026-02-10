@@ -27,7 +27,7 @@
 | エンドポイント | 説明 | 実装 |
 |---------------|------|------|
 | `GET /private/v1/account/assets` | 資産残高 | ✅ `get_assets_py` |
-| `GET /private/v1/account/margin` | 余力情報 | ❌ |
+| `GET /private/v1/account/margin` | 余力情報 | ✅ `get_margin_py` |
 | `GET /private/v1/account/tradingVolume` | 取引高情報 | ❌ |
 | `GET /private/v1/account/fiatDepositHistory` | JPY入金履歴 | ❌ |
 | `GET /private/v1/account/fiatWithdrawalHistory` | JPY出金履歴 | ❌ |
@@ -59,18 +59,19 @@
 | `size` | ✅ |
 | `price` | ✅ |
 | `timeInForce` | ✅ (FAK/FAS/FOK/SOK 対応) |
-| `losscutPrice` | ❌ (changeOrderのみ対応) |
+| `losscutPrice` | ✅ (post_order + changeOrder) |
+| `settleType` | ✅ (OPEN/CLOSE) |
 | `cancelBefore` | ✅ |
 
 ### Private REST API - ポジション (レバレッジ取引)
 
 | エンドポイント | 説明 | 実装 |
 |---------------|------|------|
-| `GET /private/v1/openPositions` | 建玉一覧 | ❌ |
-| `GET /private/v1/positionSummary` | 建玉サマリー | ❌ |
-| `POST /private/v1/closeOrder` | 決済注文 | ❌ |
-| `POST /private/v1/closeBulkOrder` | 一括決済注文 | ❌ |
-| `PUT /private/v1/losscutPrice` | ロスカットレート変更 | ❌ |
+| `GET /private/v1/openPositions` | 建玉一覧 | ✅ `get_open_positions_py` |
+| `GET /private/v1/positionSummary` | 建玉サマリー | ✅ `get_position_summary_py` |
+| `POST /private/v1/closeOrder` | 決済注文 | ✅ `post_close_order_py` |
+| `POST /private/v1/closeBulkOrder` | 一括決済注文 | ✅ `post_close_bulk_order_py` |
+| `PUT /private/v1/losscutPrice` | ロスカットレート変更 | ✅ `put_losscut_price_py` |
 
 ### Private REST API - WebSocket認証
 
@@ -86,8 +87,8 @@
 |-----------|------|------|
 | `executionEvents` | 約定通知 | ✅ 購読済み |
 | `orderEvents` | 注文変更通知 | ✅ 購読済み |
-| `positionEvents` | 建玉変更通知 | ⚠️ ハンドラのみ (未購読) |
-| `positionSummaryEvents` | 建玉サマリー通知 | ⚠️ ハンドラのみ (未購読) |
+| `positionEvents` | 建玉変更通知 | ✅ 購読済み + ハンドラ |
+| `positionSummaryEvents` | 建玉サマリー通知 | ✅ 購読済み + ハンドラ |
 
 ### NautilusTrader連携機能
 
@@ -102,7 +103,7 @@
 | modify_order (changeOrder) | ✅ `ModifyOrder` → `change_order` |
 | generate_order_status_reports | ✅ `get_active_orders` から生成 |
 | generate_fill_reports | ✅ `get_latest_executions` から生成 |
-| generate_position_status_reports | ⚠️ 空リスト返却 (v0.2) |
+| generate_position_status_reports | ✅ `get_open_positions` から生成 |
 
 ---
 
@@ -122,13 +123,13 @@ Python Config の `rate_limit_per_sec` / `ws_rate_limit_per_sec` で設定可能
 
 | エンドポイント | 用途 |
 |---------------|------|
-| `GET /v1/account/margin` | レバレッジ余力。現物のみ (v0.1) では不要 |
+| ~~`GET /v1/account/margin`~~ | ~~レバレッジ余力~~ ✅ 実装済み |
 | `GET /v1/account/tradingVolume` | 取引高。レート制限Tier判定に使える |
 | `GET /v1/account/fiatDepositHistory` | JPY入金履歴。監査/ログ用途 |
 | `GET /v1/account/fiatWithdrawalHistory` | JPY出金履歴。監査/ログ用途 |
 | `GET /v1/account/depositHistory` | 暗号資産入金履歴。監査/ログ用途 |
 | `GET /v1/account/withdrawalHistory` | 暗号資産出金履歴。監査/ログ用途 |
-| `POST /v1/account/transfer` | 現物↔レバレッジ口座振替。v0.2で必要 |
+| `POST /v1/account/transfer` | 現物↔レバレッジ口座振替 |
 
 ### 3. `DELETE /private/v1/ws-auth` 署名問題
 
@@ -154,22 +155,24 @@ Tickデータからのローカル集計が必要。現在は警告ログを出�
 
 ---
 
-## ポジション/レバレッジ対応 (v0.2)
+## ~~ポジション/レバレッジ対応 (v0.2)~~ ✅ 実装済み
 
-| 機能 | エンドポイント | 説明 |
+| 機能 | エンドポイント | 状態 |
 |------|---------------|------|
-| マージンロング | `POST /v1/order` (`settleType=OPEN`) | 信用買い |
-| 空売り (ショート) | `POST /v1/order` (`settleType=OPEN`, `side=SELL`) | 信用売り |
-| 決済注文 | `POST /v1/closeOrder` | 個別決済 |
-| 一括決済 | `POST /v1/closeBulkOrder` | 銘柄単位一括決済 |
-| 建玉一覧 | `GET /v1/openPositions` | ポジション取得 |
-| 建玉サマリー | `GET /v1/positionSummary` | サマリー取得 |
-| ロスカットレート変更 | `PUT /v1/losscutPrice` | ロスカット価格変更 |
-| 口座振替 | `POST /v1/account/transfer` | 現物↔レバレッジ |
-| 余力情報 | `GET /v1/account/margin` | レバレッジ余力 |
-| WS 建玉通知 | `positionEvents` チャンネル購読 | ハンドラは実装済み |
-| WS 建玉サマリー通知 | `positionSummaryEvents` チャンネル購読 | ハンドラは実装済み |
-| `losscutPrice` パラメータ | `post_order_py` に追加 | 新規注文時のロスカット価格 |
+| マージンロング | `POST /v1/order` (`settleType=OPEN`) | ✅ order tagsで指定 |
+| 空売り (ショート) | `POST /v1/order` (`settleType=OPEN`, `side=SELL`) | ✅ order tagsで指定 |
+| 決済注文 | `POST /v1/closeOrder` | ✅ `post_close_order_py` |
+| 一括決済 | `POST /v1/closeBulkOrder` | ✅ `post_close_bulk_order_py` |
+| 建玉一覧 | `GET /v1/openPositions` | ✅ `get_open_positions_py` |
+| 建玉サマリー | `GET /v1/positionSummary` | ✅ `get_position_summary_py` |
+| ロスカットレート変更 | `PUT /v1/losscutPrice` | ✅ `put_losscut_price_py` |
+| 口座振替 | `POST /v1/account/transfer` | ❌ 未実装 |
+| 余力情報 | `GET /v1/account/margin` | ✅ `get_margin_py` |
+| WS 建玉通知 | `positionEvents` チャンネル購読 | ✅ 購読 + ハンドラ |
+| WS 建玉サマリー通知 | `positionSummaryEvents` チャンネル購読 | ✅ 購読 + ハンドラ |
+| `losscutPrice` パラメータ | `post_order_py` に追加 | ✅ order tagsで指定 |
+| `settleType` パラメータ | `post_order_py` に追加 | ✅ order tagsで指定 |
+| `generate_position_status_reports` | `get_open_positions` から生成 | ✅ |
 
 ---
 
@@ -178,4 +181,4 @@ Tickデータからのローカル集計が必要。現在は警告ログを出�
 - [ ] ユニットテスト作成 (`tests/` ディレクトリ)
 - [ ] 約定テスト (JPY入金後に小額LIMIT注文 → 約定 → WS通知確認)
 - [ ] エラーハンドリング強化 (ネットワーク断時のリトライ戦略改善)
-- [ ] `eprintln!` ログを `tracing` クレートに移行
+- [x] `eprintln!` ログを `tracing` クレートに移行

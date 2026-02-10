@@ -5,8 +5,8 @@ use sha2::Sha256;
 use crate::error::GmocoinError;
 use crate::model::{
     market_data::{Ticker, Depth, SymbolInfo},
-    order::{OrdersList, ExecutionsList},
-    account::Asset,
+    order::{OrdersList, ExecutionsList, PositionsList, PositionSummaryList},
+    account::{Asset, Margin},
 };
 use crate::rate_limit::TokenBucket;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -174,6 +174,7 @@ impl GmocoinRestClient {
 
     // ========== Order API (Python) ==========
 
+    #[pyo3(signature = (symbol, side, execution_type, size, price=None, time_in_force=None, cancel_before=None, losscut_price=None, settle_type=None))]
     pub fn post_order_py(
         &self,
         py: Python,
@@ -184,6 +185,8 @@ impl GmocoinRestClient {
         price: Option<String>,
         time_in_force: Option<String>,
         cancel_before: Option<bool>,
+        losscut_price: Option<String>,
+        settle_type: Option<String>,
     ) -> PyResult<PyObject> {
         let client = self.clone();
         let future = async move {
@@ -196,6 +199,8 @@ impl GmocoinRestClient {
             if let Some(p) = price { body["price"] = serde_json::json!(p); }
             if let Some(tif) = time_in_force { body["timeInForce"] = serde_json::json!(tif); }
             if let Some(cb) = cancel_before { body["cancelBefore"] = serde_json::json!(cb); }
+            if let Some(lp) = losscut_price { body["losscutPrice"] = serde_json::json!(lp); }
+            if let Some(st) = settle_type { body["settleType"] = serde_json::json!(st); }
 
             let body_str = body.to_string();
             let res: serde_json::Value = client.private_post("/v1/order", &body_str).await.map_err(PyErr::from)?;
@@ -288,6 +293,120 @@ impl GmocoinRestClient {
         let future = async move {
             let body = serde_json::json!({"token": token}).to_string();
             let res: serde_json::Value = client.private_put("/v1/ws-auth", &body).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    // ========== Position API (Python) ==========
+
+    pub fn get_margin_py(&self, py: Python) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let res: Margin = client.private_get("/v1/account/margin", None).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn get_open_positions_py(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let mut query_owned: Vec<(String, String)> = vec![("symbol".to_string(), symbol)];
+            if let Some(p) = page { query_owned.push(("page".to_string(), p.to_string())); }
+            if let Some(c) = count { query_owned.push(("count".to_string(), c.to_string())); }
+            let query: Vec<(&str, &str)> = query_owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let res: PositionsList = client.private_get("/v1/openPositions", Some(&query)).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn get_position_summary_py(&self, py: Python, symbol: Option<String>) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let query_owned: Vec<(String, String)> = if let Some(s) = symbol {
+                vec![("symbol".to_string(), s)]
+            } else {
+                vec![]
+            };
+            let query: Vec<(&str, &str)> = query_owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            let q = if query.is_empty() { None } else { Some(query.as_slice()) };
+            let res: PositionSummaryList = client.private_get("/v1/positionSummary", q).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    #[pyo3(signature = (symbol, side, execution_type, settle_position, price=None, time_in_force=None))]
+    pub fn post_close_order_py(
+        &self,
+        py: Python,
+        symbol: String,
+        side: String,
+        execution_type: String,
+        settle_position: Vec<(u64, String)>,
+        price: Option<String>,
+        time_in_force: Option<String>,
+    ) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let positions: Vec<serde_json::Value> = settle_position.iter()
+                .map(|(pid, size)| serde_json::json!({"positionId": pid, "size": size}))
+                .collect();
+            let mut body = serde_json::json!({
+                "symbol": symbol,
+                "side": side,
+                "executionType": execution_type,
+                "settlePosition": positions,
+            });
+            if let Some(p) = price { body["price"] = serde_json::json!(p); }
+            if let Some(tif) = time_in_force { body["timeInForce"] = serde_json::json!(tif); }
+
+            let body_str = body.to_string();
+            let res: serde_json::Value = client.private_post("/v1/closeOrder", &body_str).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    #[pyo3(signature = (symbol, side, execution_type, size, price=None, time_in_force=None))]
+    pub fn post_close_bulk_order_py(
+        &self,
+        py: Python,
+        symbol: String,
+        side: String,
+        execution_type: String,
+        size: String,
+        price: Option<String>,
+        time_in_force: Option<String>,
+    ) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let mut body = serde_json::json!({
+                "symbol": symbol,
+                "side": side,
+                "executionType": execution_type,
+                "size": size,
+            });
+            if let Some(p) = price { body["price"] = serde_json::json!(p); }
+            if let Some(tif) = time_in_force { body["timeInForce"] = serde_json::json!(tif); }
+
+            let body_str = body.to_string();
+            let res: serde_json::Value = client.private_post("/v1/closeBulkOrder", &body_str).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn put_losscut_price_py(&self, py: Python, position_id: u64, losscut_price: String) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let body = serde_json::json!({
+                "positionId": position_id,
+                "losscutPrice": losscut_price,
+            }).to_string();
+            let res: serde_json::Value = client.private_put("/v1/changeLosscutPrice", &body).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
         pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
@@ -498,6 +617,8 @@ impl GmocoinRestClient {
         price: Option<&str>,
         time_in_force: Option<&str>,
         cancel_before: Option<bool>,
+        losscut_price: Option<&str>,
+        settle_type: Option<&str>,
     ) -> Result<serde_json::Value, GmocoinError> {
         let mut body = serde_json::json!({
             "symbol": symbol,
@@ -513,6 +634,12 @@ impl GmocoinRestClient {
         }
         if let Some(cb) = cancel_before {
             body["cancelBefore"] = serde_json::json!(cb);
+        }
+        if let Some(lp) = losscut_price {
+            body["losscutPrice"] = serde_json::json!(lp);
+        }
+        if let Some(st) = settle_type {
+            body["settleType"] = serde_json::json!(st);
         }
 
         let body_str = body.to_string();
@@ -578,6 +705,84 @@ impl GmocoinRestClient {
         let oid_str = order_id.to_string();
         let query = vec![("orderId", oid_str.as_str())];
         self.private_get("/v1/executions", Some(&query)).await
+    }
+
+    pub async fn get_open_positions(&self, symbol: &str, page: i32, count: i32) -> Result<PositionsList, GmocoinError> {
+        let page_str = page.to_string();
+        let count_str = count.to_string();
+        let query = vec![
+            ("symbol", symbol),
+            ("page", &page_str),
+            ("count", &count_str),
+        ];
+        self.private_get("/v1/openPositions", Some(&query)).await
+    }
+
+    pub async fn get_position_summary(&self, symbol: Option<&str>) -> Result<PositionSummaryList, GmocoinError> {
+        let query_owned: Vec<(&str, &str)> = if let Some(s) = symbol {
+            vec![("symbol", s)]
+        } else {
+            vec![]
+        };
+        let q = if query_owned.is_empty() { None } else { Some(query_owned.as_slice()) };
+        self.private_get("/v1/positionSummary", q).await
+    }
+
+    pub async fn close_order(
+        &self,
+        symbol: &str,
+        side: &str,
+        execution_type: &str,
+        settle_position: &[(u64, &str)],
+        price: Option<&str>,
+        time_in_force: Option<&str>,
+    ) -> Result<serde_json::Value, GmocoinError> {
+        let positions: Vec<serde_json::Value> = settle_position.iter()
+            .map(|(pid, size)| serde_json::json!({"positionId": pid, "size": size}))
+            .collect();
+        let mut body = serde_json::json!({
+            "symbol": symbol,
+            "side": side,
+            "executionType": execution_type,
+            "settlePosition": positions,
+        });
+        if let Some(p) = price { body["price"] = serde_json::json!(p); }
+        if let Some(tif) = time_in_force { body["timeInForce"] = serde_json::json!(tif); }
+        let body_str = body.to_string();
+        self.private_post("/v1/closeOrder", &body_str).await
+    }
+
+    pub async fn close_bulk_order(
+        &self,
+        symbol: &str,
+        side: &str,
+        execution_type: &str,
+        size: &str,
+        price: Option<&str>,
+        time_in_force: Option<&str>,
+    ) -> Result<serde_json::Value, GmocoinError> {
+        let mut body = serde_json::json!({
+            "symbol": symbol,
+            "side": side,
+            "executionType": execution_type,
+            "size": size,
+        });
+        if let Some(p) = price { body["price"] = serde_json::json!(p); }
+        if let Some(tif) = time_in_force { body["timeInForce"] = serde_json::json!(tif); }
+        let body_str = body.to_string();
+        self.private_post("/v1/closeBulkOrder", &body_str).await
+    }
+
+    pub async fn change_losscut_price(&self, position_id: u64, losscut_price: &str) -> Result<serde_json::Value, GmocoinError> {
+        let body = serde_json::json!({
+            "positionId": position_id,
+            "losscutPrice": losscut_price,
+        }).to_string();
+        self.private_put("/v1/changeLosscutPrice", &body).await
+    }
+
+    pub async fn get_margin(&self) -> Result<Margin, GmocoinError> {
+        self.private_get("/v1/account/margin", None).await
     }
 
     pub async fn delete_ws_auth(&self, token: &str) -> Result<(), GmocoinError> {

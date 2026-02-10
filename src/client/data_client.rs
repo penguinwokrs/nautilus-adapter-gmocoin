@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use tokio::time::{sleep, Duration};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::{info, warn, error};
 
 use crate::model::orderbook::OrderBook;
 use crate::rate_limit::TokenBucket;
@@ -157,7 +158,7 @@ impl GmocoinDataClient {
 
             match connect_async(url).await {
                 Ok((mut ws, _)) => {
-                    eprintln!("GMO: Connected to Public WebSocket");
+                    info!("GMO: Connected to Public WebSocket");
                     backoff_sec = 1;
                     connected.store(true, Ordering::SeqCst);
 
@@ -190,7 +191,7 @@ impl GmocoinDataClient {
                     for msg in to_send {
                         ws_rate_limit.acquire().await;
                         if let Err(e) = ws.send(Message::Text(msg)).await {
-                            eprintln!("GMO: Failed to send subscribe: {}", e);
+                            error!("GMO: Failed to send subscribe: {}", e);
                         }
                     }
 
@@ -209,7 +210,7 @@ impl GmocoinDataClient {
                                     let mut queue = outgoing_arc.lock().unwrap();
                                     for msg in queue.drain(..) {
                                         if let Err(e) = ws.send(Message::Text(msg)).await {
-                                            eprintln!("GMO: Failed to send msg: {}", e);
+                                            error!("GMO: Failed to send msg: {}", e);
                                         }
                                     }
                                 }
@@ -217,7 +218,7 @@ impl GmocoinDataClient {
                                 if let Ok(val) = serde_json::from_str::<Value>(&txt) {
                                     // Check for error responses (ERR-5003 rate limit, etc.)
                                     if val.get("error").is_some() {
-                                        eprintln!("GMO: WS error response: {}", txt);
+                                        warn!("GMO: WS error response: {}", txt);
                                         continue;
                                     }
 
@@ -236,22 +237,22 @@ impl GmocoinDataClient {
                                     let mut queue = outgoing_arc.lock().unwrap();
                                     for msg in queue.drain(..) {
                                         if let Err(e) = ws.send(Message::Text(msg)).await {
-                                            eprintln!("GMO: Failed to send msg: {}", e);
+                                            error!("GMO: Failed to send msg: {}", e);
                                         }
                                     }
                                 }
                                 let _ = ws.send(Message::Pong(data)).await;
                             }
                             Some(Ok(Message::Close(_))) => {
-                                eprintln!("GMO: Public WS closed by server");
+                                warn!("GMO: Public WS closed by server");
                                 break;
                             }
                             Some(Err(e)) => {
-                                eprintln!("GMO: Public WS error: {}", e);
+                                error!("GMO: Public WS error: {}", e);
                                 break;
                             }
                             None => {
-                                eprintln!("GMO: Public WS stream ended");
+                                warn!("GMO: Public WS stream ended");
                                 break;
                             }
                             _ => {}
@@ -261,7 +262,7 @@ impl GmocoinDataClient {
                     connected.store(false, Ordering::SeqCst);
                 }
                 Err(e) => {
-                    eprintln!("GMO: Public WS connection failed: {}. Retrying in {}s...", e, backoff_sec);
+                    error!("GMO: Public WS connection failed: {}. Retrying in {}s...", e, backoff_sec);
                 }
             }
 
