@@ -20,7 +20,7 @@
 | `ticker` | リアルタイムレート | ✅ |
 | `orderbooks` | 板情報 | ✅ |
 | `trades` | 約定情報 | ✅ |
-| `trades` (option: `TAKER_ONLY`) | Takerのみフィルタ | ❌ |
+| `trades` (option: `TAKER_ONLY`) | Takerのみフィルタ | ✅ `config.trades_taker_only` |
 
 ### Private REST API - アカウント
 
@@ -137,15 +137,13 @@ Python Config の `rate_limit_per_sec` / `ws_rate_limit_per_sec` で設定可能
 `delete_ws_auth_py` は実装済みだが、DELETEリクエストのbody付き署名がGMOコインで正しく検証されない。
 トークンは60分で自動失効するため実用上の影響は小さい。
 
-### 4. `trades` チャンネル `TAKER_ONLY` オプション
+### ~~4. `trades` チャンネル `TAKER_ONLY` オプション~~ (実装済み)
 
-**優先度: Low**
+`subscribe()` に `option` パラメータ追加。Python Config の `trades_taker_only=True` で有効化。
 
-```json
-{"command": "subscribe", "channel": "trades", "symbol": "BTC", "option": "TAKER_ONLY"}
+```python
+GmocoinDataClientConfig(api_key="...", api_secret="...", trades_taker_only=True)
 ```
-
-Taker約定のみをフィルタリングして受信。`subscribe()` に `option` パラメータ追加が必要。
 
 ### 5. `_subscribe_bars` (Bar/OHLCV リアルタイム)
 

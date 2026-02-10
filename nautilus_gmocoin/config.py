@@ -10,6 +10,7 @@ class GmocoinDataClientConfig(LiveDataClientConfig):
     order_book_depth: int = 20
     rate_limit_per_sec: Optional[float] = None  # REST API rate limit (default: 20 for Tier 1)
     ws_rate_limit_per_sec: Optional[float] = None  # WS subscription rate (default: 0.5)
+    trades_taker_only: bool = False  # Subscribe to trades with TAKER_ONLY filter
 
     def __post_init__(self):
         if not self.api_key or not self.api_secret:

@@ -15,7 +15,8 @@ use crate::rate_limit::TokenBucket;
 #[derive(Clone)]
 pub struct GmocoinDataClient {
     data_callback: Arc<std::sync::Mutex<Option<PyObject>>>,
-    subscriptions: Arc<std::sync::Mutex<HashSet<(String, String)>>>,
+    /// (channel, symbol, option) - option is e.g. "TAKER_ONLY" for trades
+    subscriptions: Arc<std::sync::Mutex<HashSet<(String, String, String)>>>,
     outgoing: Arc<std::sync::Mutex<Vec<String>>>,
     books: Arc<std::sync::Mutex<std::collections::HashMap<String, OrderBook>>>,
     shutdown: Arc<AtomicBool>,
@@ -83,29 +84,27 @@ impl GmocoinDataClient {
         pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
     }
 
-    pub fn subscribe(&self, py: Python, channel: String, symbol: String) -> PyResult<PyObject> {
+    /// Subscribe to a channel for a symbol, with an optional option (e.g. "TAKER_ONLY" for trades).
+    #[pyo3(signature = (channel, symbol, option = None))]
+    pub fn subscribe(&self, py: Python, channel: String, symbol: String, option: Option<String>) -> PyResult<PyObject> {
         let subs_arc = self.subscriptions.clone();
         let outgoing_arc = self.outgoing.clone();
         let connected = self.connected.clone();
 
         let future = async move {
+            let opt_str = option.clone().unwrap_or_default();
+
             // Always store for reconnection
             {
                 let mut subs = subs_arc.lock().unwrap();
-                subs.insert((channel.clone(), symbol.clone()));
+                subs.insert((channel.clone(), symbol.clone(), opt_str));
             }
 
             // If already connected, queue the subscribe message for immediate sending.
-            // The WS thread will pick it up between messages.
-            // If not yet connected, the WS thread will read from subs_arc upon connection.
             if connected.load(Ordering::SeqCst) {
-                let msg = serde_json::json!({
-                    "command": "subscribe",
-                    "channel": channel,
-                    "symbol": symbol,
-                });
+                let msg = Self::build_subscribe_msg(&channel, &symbol, option.as_deref());
                 let mut queue = outgoing_arc.lock().unwrap();
-                queue.push(msg.to_string());
+                queue.push(msg);
             }
 
             Ok("Subscribe command stored")
@@ -125,8 +124,22 @@ impl GmocoinDataClient {
 }
 
 impl GmocoinDataClient {
+    fn build_subscribe_msg(channel: &str, symbol: &str, option: Option<&str>) -> String {
+        let mut msg = serde_json::json!({
+            "command": "subscribe",
+            "channel": channel,
+            "symbol": symbol,
+        });
+        if let Some(opt) = option {
+            if !opt.is_empty() {
+                msg["option"] = serde_json::Value::String(opt.to_string());
+            }
+        }
+        msg.to_string()
+    }
+
     async fn ws_loop(
-        subs_arc: Arc<std::sync::Mutex<HashSet<(String, String)>>>,
+        subs_arc: Arc<std::sync::Mutex<HashSet<(String, String, String)>>>,
         outgoing_arc: Arc<std::sync::Mutex<Vec<String>>>,
         data_cb_arc: Arc<std::sync::Mutex<Option<PyObject>>>,
         books_arc: Arc<std::sync::Mutex<std::collections::HashMap<String, OrderBook>>>,
@@ -157,13 +170,9 @@ impl GmocoinDataClient {
                             let lock = subs_arc.lock().unwrap();
                             lock.iter().cloned().collect()
                         };
-                        for (channel, symbol) in &subs {
-                            let msg = serde_json::json!({
-                                "command": "subscribe",
-                                "channel": channel,
-                                "symbol": symbol,
-                            });
-                            to_send.push(msg.to_string());
+                        for (channel, symbol, opt) in &subs {
+                            let option = if opt.is_empty() { None } else { Some(opt.as_str()) };
+                            to_send.push(Self::build_subscribe_msg(channel, symbol, option));
                         }
                     }
 

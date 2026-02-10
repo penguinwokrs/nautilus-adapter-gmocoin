@@ -75,7 +75,8 @@ class GmocoinDataClient(LiveMarketDataClient):
 
             # Subscribe to all channels for this symbol
             await self._rust_client.subscribe("ticker", gmo_symbol)
-            await self._rust_client.subscribe("trades", gmo_symbol)
+            trades_option = "TAKER_ONLY" if self.config.trades_taker_only else None
+            await self._rust_client.subscribe("trades", gmo_symbol, trades_option)
             await self._rust_client.subscribe("orderbooks", gmo_symbol)
 
         self._logger.info(f"Subscribed to {len(instruments)} instruments")
