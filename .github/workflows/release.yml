@@ -42,40 +42,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux (manylinux) - サーバー運用で最も一般的
-          - platform: linux
-            runner: ubuntu-22.04
+          - runner: ubuntu-22.04
             target: x86_64
-          - platform: linux
-            runner: ubuntu-22.04
+          - runner: ubuntu-22.04
             target: aarch64
-          # macOS
-          - platform: macos
-            runner: macos-14
-            target: aarch64
-          - platform: macos
-            runner: macos-14-intel
-            target: x86_64
-          # Windows
-          - platform: windows
-            runner: windows-latest
-            target: x64
-            python_arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU (Linux aarch64)
-        if: matrix.platform == 'linux' && matrix.target == 'aarch64'
+      - name: Set up QEMU (aarch64)
+        if: matrix.target == 'aarch64'
         uses: docker/setup-qemu-action@v3
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          architecture: ${{ matrix.python_arch || 'x64' }}
 
-      - name: Build wheels (Linux)
-        if: matrix.platform == 'linux'
+      - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           command: build
@@ -83,26 +66,10 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
 
-      - name: Build wheels (macOS)
-        if: matrix.platform == 'macos'
-        uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release --out dist -i python3.11
-          target: ${{ matrix.target }}
-
-      - name: Build wheels (Windows)
-        if: matrix.platform == 'windows'
-        uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release --out dist -i python3.11
-          target: ${{ matrix.target }}
-
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.platform }}-${{ matrix.target }}
+          name: wheels-linux-${{ matrix.target }}
           path: dist/
 
   sdist:
@@ -179,8 +146,6 @@ jobs:
             ### プラットフォーム
 
             - Linux x86_64, aarch64 (manylinux)
-            - macOS x86_64, aarch64 (Apple Silicon)
-            - Windows x64
 
             ### Python バージョン
 

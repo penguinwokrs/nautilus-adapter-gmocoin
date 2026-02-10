@@ -24,7 +24,7 @@
 pip install nautilus_adapter_gmocoin-0.1.0-cp311-abi3-manylinux_2_34_x86_64.whl
 ```
 
-対応プラットフォーム: Linux (x86_64, aarch64)、macOS (x86_64, Apple Silicon)、Windows (x64)
+対応プラットフォーム: Linux (x86_64, aarch64)
 
 ### ソースからビルド
 
