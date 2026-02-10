@@ -34,5 +34,7 @@ jobs:
         run: pip install pytest nautilus-trader
 
       - name: Run tests
-        working-directory: ${{ runner.temp }}
-        run: python -m pytest $GITHUB_WORKSPACE/tests/ -v --tb=short
+        run: |
+          cp -r tests ${{ runner.temp }}/tests
+          cd ${{ runner.temp }}
+          python -m pytest tests/ -v --tb=short
