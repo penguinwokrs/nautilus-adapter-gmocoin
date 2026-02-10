@@ -102,13 +102,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get version and short SHA
+      - name: Get version
         id: vars
         run: |
           VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
-          SHORT_SHA=${GITHUB_SHA::7}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Delete existing release and tag (to update on each merge)
+        run: |
+          TAG="v${{ steps.vars.outputs.version }}"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -126,8 +131,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.vars.outputs.version }}-${{ steps.vars.outputs.short_sha }}
-          name: v${{ steps.vars.outputs.version }} (${{ steps.vars.outputs.short_sha }})
+          tag_name: v${{ steps.vars.outputs.version }}
+          name: v${{ steps.vars.outputs.version }}
+          target_commitish: ${{ github.sha }}
           body: |
             ## NautilusTrader GMO Coin Adapter
 
@@ -154,5 +160,6 @@ jobs:
             Python 3.11 以上
           draft: false
           prerelease: false
+          make_latest: true
           files: release-packages/*
           generate_release_notes: true
