@@ -82,14 +82,17 @@ impl GmocoinExecutionClient {
         execution_type: String,
         client_order_id: String,
         price: Option<String>,
+        time_in_force: Option<String>,
+        cancel_before: Option<bool>,
     ) -> PyResult<PyObject> {
         let rest_client = self.rest_client.clone();
         let client_oid_map_arc = self.client_oid_map.clone();
 
         let future = async move {
             let price_ref = price.as_deref();
+            let tif_ref = time_in_force.as_deref();
             let res = rest_client
-                .submit_order(&symbol, &side, &execution_type, &amount, price_ref, None)
+                .submit_order(&symbol, &side, &execution_type, &amount, price_ref, tif_ref, cancel_before)
                 .await
                 .map_err(PyErr::from)?;
 
@@ -146,6 +149,92 @@ impl GmocoinExecutionClient {
 
             let res = rest_client
                 .get_executions_for_order(oid)
+                .await
+                .map_err(PyErr::from)?;
+            serde_json::to_string(&res)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn change_order(
+        &self,
+        py: Python,
+        order_id: String,
+        price: String,
+        losscut_price: Option<String>,
+    ) -> PyResult<PyObject> {
+        let rest_client = self.rest_client.clone();
+        let future = async move {
+            let oid = order_id.parse::<u64>().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid order_id: {}", e))
+            })?;
+
+            let lp_ref = losscut_price.as_deref();
+            let res = rest_client
+                .change_order(oid, &price, lp_ref)
+                .await
+                .map_err(PyErr::from)?;
+            serde_json::to_string(&res)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn cancel_orders(
+        &self,
+        py: Python,
+        order_ids: Vec<String>,
+    ) -> PyResult<PyObject> {
+        let rest_client = self.rest_client.clone();
+        let future = async move {
+            let oids: Vec<u64> = order_ids.iter()
+                .map(|s| s.parse::<u64>())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    format!("Invalid order_id: {}", e)
+                ))?;
+
+            let res = rest_client
+                .cancel_orders(&oids)
+                .await
+                .map_err(PyErr::from)?;
+            serde_json::to_string(&res)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn get_active_orders(
+        &self,
+        py: Python,
+        symbol: String,
+        page: Option<i32>,
+        count: Option<i32>,
+    ) -> PyResult<PyObject> {
+        let rest_client = self.rest_client.clone();
+        let future = async move {
+            let res = rest_client
+                .get_active_orders(&symbol, page.unwrap_or(1), count.unwrap_or(100))
+                .await
+                .map_err(PyErr::from)?;
+            serde_json::to_string(&res)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn get_latest_executions(
+        &self,
+        py: Python,
+        symbol: String,
+        page: Option<i32>,
+        count: Option<i32>,
+    ) -> PyResult<PyObject> {
+        let rest_client = self.rest_client.clone();
+        let future = async move {
+            let res = rest_client
+                .get_latest_executions(&symbol, page.unwrap_or(1), count.unwrap_or(100))
                 .await
                 .map_err(PyErr::from)?;
             serde_json::to_string(&res)

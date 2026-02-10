@@ -42,7 +42,7 @@
 | `POST /private/v1/order` | 新規注文 | ✅ `post_order_py` |
 | `POST /private/v1/changeOrder` | 注文変更 | ✅ `post_change_order_py` |
 | `POST /private/v1/cancelOrder` | 注文キャンセル | ✅ `post_cancel_order_py` |
-| `POST /private/v1/cancelOrders` | 複数注文キャンセル (ID指定) | ❌ |
+| `POST /private/v1/cancelOrders` | 複数注文キャンセル (ID指定) | ✅ `post_cancel_orders_py` |
 | `POST /private/v1/cancelBulkOrder` | 一括注文キャンセル (銘柄指定) | ✅ `post_cancel_bulk_order_py` |
 | `GET /private/v1/orders` | 注文情報取得 | ✅ `get_order_py` |
 | `GET /private/v1/activeOrders` | 有効注文一覧 | ✅ `get_active_orders_py` |
@@ -58,9 +58,9 @@
 | `executionType` | ✅ |
 | `size` | ✅ |
 | `price` | ✅ |
-| `timeInForce` | ✅ |
+| `timeInForce` | ✅ (FAK/FAS/FOK/SOK 対応) |
 | `losscutPrice` | ❌ (changeOrderのみ対応) |
-| `cancelBefore` | ❌ |
+| `cancelBefore` | ✅ |
 
 ### Private REST API - ポジション (レバレッジ取引)
 
@@ -78,7 +78,7 @@
 |---------------|------|------|
 | `POST /private/v1/ws-auth` | アクセストークン取得 | ✅ `post_ws_auth_py` |
 | `PUT /private/v1/ws-auth` | トークン延長 | ✅ `put_ws_auth_py` |
-| `DELETE /private/v1/ws-auth` | トークン削除 | ❌ |
+| `DELETE /private/v1/ws-auth` | トークン削除 | ⚠️ `delete_ws_auth_py` (署名検証に問題あり) |
 
 ### Private WebSocket (`wss://api.coin.z.com/ws/private/v1/{token}`)
 
@@ -91,18 +91,18 @@
 
 ### NautilusTrader連携機能
 
-| 機能 | 説明 | 実装 |
-|------|------|------|
-| QuoteTick (ticker→bid/ask) | ✅ |  |
-| TradeTick (trades→price/size/side) | ✅ |  |
-| OrderBookDeltas (orderbooks→snapshot) | ✅ |  |
-| Bar (klines→OHLCV) | ❌ `_subscribe_bars` は警告ログのみ |  |
-| submit_order (MARKET/LIMIT/STOP) | ✅ |  |
-| cancel_order | ✅ |  |
-| modify_order (changeOrder) | ❌ Python ExecutionClient未対応 |  |
-| generate_order_status_reports | ⚠️ 空リスト返却 |  |
-| generate_fill_reports | ⚠️ 空リスト返却 |  |
-| generate_position_status_reports | ⚠️ 空リスト返却 |  |
+| 機能 | 実装 |
+|------|------|
+| QuoteTick (ticker→bid/ask) | ✅ |
+| TradeTick (trades→price/size/side) | ✅ |
+| OrderBookDeltas (orderbooks→snapshot) | ✅ |
+| Bar (klines→OHLCV) | ❌ `_subscribe_bars` は警告ログのみ |
+| submit_order (MARKET/LIMIT/STOP + TimeInForce) | ✅ |
+| cancel_order | ✅ |
+| modify_order (changeOrder) | ✅ `ModifyOrder` → `change_order` |
+| generate_order_status_reports | ✅ `get_active_orders` から生成 |
+| generate_fill_reports | ✅ `get_latest_executions` から生成 |
+| generate_position_status_reports | ⚠️ 空リスト返却 (v0.2) |
 
 ---
 
@@ -128,21 +128,10 @@ GMOコインAPIにはTier別のレート制限があり、超過すると `ERR-5
 - Python Config から設定可能にする
 
 **暫定対応箇所:**
-- `src/client/data_client.rs` L170-172 (購読間2sディレイ)
-- `src/client/execution_client.rs` L207-211 (同上)
+- `src/client/data_client.rs` (購読間2sディレイ)
+- `src/client/execution_client.rs` (同上)
 
-### 2. `POST /private/v1/cancelOrders` (複数注文ID指定キャンセル)
-
-**優先度: Low**
-
-`cancelBulkOrder` (銘柄単位の一括キャンセル) は実装済みだが、特定の注文IDリストを指定するキャンセルは未実装。
-
-```
-POST /private/v1/cancelOrders
-Body: {"orderIds": [123, 456, 789]}
-```
-
-### 3. アカウント情報系エンドポイント
+### 2. アカウント情報系エンドポイント
 
 **優先度: Low** (NautilusTrader直接連携には不要)
 
@@ -156,22 +145,14 @@ Body: {"orderIds": [123, 456, 789]}
 | `GET /v1/account/withdrawalHistory` | 暗号資産出金履歴。監査/ログ用途 |
 | `POST /v1/account/transfer` | 現物↔レバレッジ口座振替。v0.2で必要 |
 
-### 4. `DELETE /private/v1/ws-auth` (WSトークン削除)
+### 3. `DELETE /private/v1/ws-auth` 署名問題
 
 **優先度: Low**
 
-disconnect時にトークンを明示的に無効化する。現在は放置で有効期限切れに依存。
+`delete_ws_auth_py` は実装済みだが、DELETEリクエストのbody付き署名がGMOコインで正しく検証されない。
+トークンは60分で自動失効するため実用上の影響は小さい。
 
-### 5. 注文パラメータ拡張
-
-**優先度: Medium**
-
-| パラメータ | 説明 | 対応方針 |
-|-----------|------|---------|
-| `losscutPrice` | ロスカット価格 (レバレッジ用) | v0.2で `post_order_py` に追加 |
-| `cancelBefore` | 注文前に既存注文をキャンセル | `post_order_py` にオプション追加 |
-
-### 6. `trades` チャンネル `TAKER_ONLY` オプション
+### 4. `trades` チャンネル `TAKER_ONLY` オプション
 
 **優先度: Low**
 
@@ -181,29 +162,12 @@ disconnect時にトークンを明示的に無効化する。現在は放置で�
 
 Taker約定のみをフィルタリングして受信。`subscribe()` に `option` パラメータ追加が必要。
 
-### 7. NautilusTrader レポート機能
-
-**優先度: Medium**
-
-| メソッド | 現状 | 対応方針 |
-|---------|------|---------|
-| `generate_order_status_reports` | 空リスト | `get_active_orders` + `get_orders` で実装 |
-| `generate_fill_reports` | 空リスト | `get_latest_executions` で実装 |
-| `generate_position_status_reports` | 空リスト | v0.2でポジション対応時に実装 |
-
-### 8. `_subscribe_bars` (Bar/OHLCV リアルタイム)
+### 5. `_subscribe_bars` (Bar/OHLCV リアルタイム)
 
 **優先度: Low**
 
 GMOコインにはBar用のWebSocketチャンネルがないため、REST `get_klines` のポーリングまたは
 Tickデータからのローカル集計が必要。現在は警告ログを出力するのみ。
-
-### 9. `modify_order` (Python ExecutionClient)
-
-**優先度: Medium**
-
-Rust側の `post_change_order_py` は実装済みだが、Python `GmocoinExecutionClient` に
-`modify_order(command: ModifyOrder)` メソッドが未実装。NautilusTraderの注文変更機能を利用するために必要。
 
 ---
 
@@ -222,6 +186,7 @@ Rust側の `post_change_order_py` は実装済みだが、Python `GmocoinExecuti
 | 余力情報 | `GET /v1/account/margin` | レバレッジ余力 |
 | WS 建玉通知 | `positionEvents` チャンネル購読 | ハンドラは実装済み |
 | WS 建玉サマリー通知 | `positionSummaryEvents` チャンネル購読 | ハンドラは実装済み |
+| `losscutPrice` パラメータ | `post_order_py` に追加 | 新規注文時のロスカット価格 |
 
 ---
 

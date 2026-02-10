@@ -166,6 +166,7 @@ impl GmocoinRestClient {
         size: String,
         price: Option<String>,
         time_in_force: Option<String>,
+        cancel_before: Option<bool>,
     ) -> PyResult<PyObject> {
         let client = self.clone();
         let future = async move {
@@ -177,6 +178,7 @@ impl GmocoinRestClient {
             });
             if let Some(p) = price { body["price"] = serde_json::json!(p); }
             if let Some(tif) = time_in_force { body["timeInForce"] = serde_json::json!(tif); }
+            if let Some(cb) = cancel_before { body["cancelBefore"] = serde_json::json!(cb); }
 
             let body_str = body.to_string();
             let res: serde_json::Value = client.private_post("/v1/order", &body_str).await.map_err(PyErr::from)?;
@@ -242,6 +244,24 @@ impl GmocoinRestClient {
         let future = async move {
             let res: serde_json::Value = client.private_post("/v1/ws-auth", "").await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn post_cancel_orders_py(&self, py: Python, order_ids: Vec<u64>) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            let res = client.cancel_orders(&order_ids).await.map_err(PyErr::from)?;
+            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        };
+        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+    }
+
+    pub fn delete_ws_auth_py(&self, py: Python, token: String) -> PyResult<PyObject> {
+        let client = self.clone();
+        let future = async move {
+            client.delete_ws_auth(&token).await.map_err(PyErr::from)?;
+            Ok("ok".to_string())
         };
         pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
     }
@@ -452,6 +472,7 @@ impl GmocoinRestClient {
         size: &str,
         price: Option<&str>,
         time_in_force: Option<&str>,
+        cancel_before: Option<bool>,
     ) -> Result<serde_json::Value, GmocoinError> {
         let mut body = serde_json::json!({
             "symbol": symbol,
@@ -465,14 +486,39 @@ impl GmocoinRestClient {
         if let Some(tif) = time_in_force {
             body["timeInForce"] = serde_json::json!(tif);
         }
+        if let Some(cb) = cancel_before {
+            body["cancelBefore"] = serde_json::json!(cb);
+        }
 
         let body_str = body.to_string();
         self.private_post("/v1/order", &body_str).await
     }
 
+    pub async fn change_order(
+        &self,
+        order_id: u64,
+        price: &str,
+        losscut_price: Option<&str>,
+    ) -> Result<serde_json::Value, GmocoinError> {
+        let mut body = serde_json::json!({
+            "orderId": order_id,
+            "price": price,
+        });
+        if let Some(lp) = losscut_price {
+            body["losscutPrice"] = serde_json::json!(lp);
+        }
+        let body_str = body.to_string();
+        self.private_post("/v1/changeOrder", &body_str).await
+    }
+
     pub async fn cancel_order(&self, order_id: u64) -> Result<serde_json::Value, GmocoinError> {
         let body = serde_json::json!({"orderId": order_id}).to_string();
         self.private_post("/v1/cancelOrder", &body).await
+    }
+
+    pub async fn cancel_orders(&self, order_ids: &[u64]) -> Result<serde_json::Value, GmocoinError> {
+        let body = serde_json::json!({"orderIds": order_ids}).to_string();
+        self.private_post("/v1/cancelOrders", &body).await
     }
 
     pub async fn get_order(&self, order_id: u64) -> Result<OrdersList, GmocoinError> {
@@ -481,9 +527,37 @@ impl GmocoinRestClient {
         self.private_get("/v1/orders", Some(&query)).await
     }
 
+    pub async fn get_active_orders(&self, symbol: &str, page: i32, count: i32) -> Result<serde_json::Value, GmocoinError> {
+        let page_str = page.to_string();
+        let count_str = count.to_string();
+        let query = vec![
+            ("symbol", symbol),
+            ("page", &page_str),
+            ("count", &count_str),
+        ];
+        self.private_get("/v1/activeOrders", Some(&query)).await
+    }
+
+    pub async fn get_latest_executions(&self, symbol: &str, page: i32, count: i32) -> Result<serde_json::Value, GmocoinError> {
+        let page_str = page.to_string();
+        let count_str = count.to_string();
+        let query = vec![
+            ("symbol", symbol),
+            ("page", &page_str),
+            ("count", &count_str),
+        ];
+        self.private_get("/v1/latestExecutions", Some(&query)).await
+    }
+
     pub async fn get_executions_for_order(&self, order_id: u64) -> Result<ExecutionsList, GmocoinError> {
         let oid_str = order_id.to_string();
         let query = vec![("orderId", oid_str.as_str())];
         self.private_get("/v1/executions", Some(&query)).await
+    }
+
+    pub async fn delete_ws_auth(&self, token: &str) -> Result<(), GmocoinError> {
+        let body = serde_json::json!({"token": token}).to_string();
+        let _: serde_json::Value = self.private_request(reqwest::Method::DELETE, "/v1/ws-auth", &body).await?;
+        Ok(())
     }
 }

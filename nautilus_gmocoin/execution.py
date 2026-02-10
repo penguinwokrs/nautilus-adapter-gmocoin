@@ -12,11 +12,17 @@ from nautilus_trader.model.events import AccountState
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.currencies import JPY
 from nautilus_trader.model.identifiers import Venue, ClientId, AccountId, VenueOrderId
-from nautilus_trader.model.enums import OrderSide, OrderType, OmsType, AccountType, OrderStatus
-from nautilus_trader.execution.messages import SubmitOrder, CancelOrder
+from nautilus_trader.model.enums import (
+    OrderSide, OrderType, OmsType, AccountType, OrderStatus,
+    TimeInForce, LiquiditySide,
+)
+from nautilus_trader.execution.messages import SubmitOrder, CancelOrder, ModifyOrder
+from nautilus_trader.execution.reports import OrderStatusReport, FillReport
+from nautilus_trader.model.identifiers import TradeId
+from nautilus_trader.model.objects import Price, Quantity
 
 from .config import GmocoinExecClientConfig
-from .constants import NAUTILUS_TO_GMO_ORDER_TYPE
+from .constants import NAUTILUS_TO_GMO_ORDER_TYPE, ORDER_STATUS_MAP, ORDER_TYPE_MAP, TIME_IN_FORCE_MAP
 
 try:
     from . import _nautilus_gmocoin as gmocoin
@@ -119,11 +125,25 @@ class GmocoinExecutionClient(LiveExecutionClient):
             elif order.order_type != OrderType.MARKET:
                 return  # Unsupported
 
+            # Map TimeInForce
+            NAUTILUS_TO_GMO_TIF = {
+                TimeInForce.GTC: "FAS",
+                TimeInForce.IOC: "FAK",
+                TimeInForce.FOK: "FOK",
+            }
+            tif = None
+            if hasattr(order, 'time_in_force') and order.time_in_force != TimeInForce.GTC:
+                tif = NAUTILUS_TO_GMO_TIF.get(order.time_in_force)
+
+            # Check for post_only -> SOK
+            if hasattr(order, 'is_post_only') and order.is_post_only:
+                tif = "SOK"
+
             amount = str(order.quantity)
             client_id = str(order.client_order_id)
 
             resp_json = await self._rust_client.submit_order(
-                gmo_symbol, amount, side, order_type, client_id, price
+                gmo_symbol, amount, side, order_type, client_id, price, tif, None
             )
 
             resp = json.loads(resp_json)
@@ -166,6 +186,42 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         except Exception as e:
             self._logger.error(f"Cancel failed: {e}")
+
+    def modify_order(self, command: ModifyOrder) -> None:
+        self.create_task(self._modify_order(command))
+
+    async def _modify_order(self, command: ModifyOrder) -> None:
+        try:
+            if not command.venue_order_id:
+                self._logger.error("ModifyOrder requires venue_order_id")
+                return
+
+            venue_order_id_str = str(command.venue_order_id)
+            new_price = str(command.price) if command.price else None
+
+            if not new_price:
+                self._logger.error("ModifyOrder requires price for GMO Coin changeOrder")
+                return
+
+            await self._rust_client.change_order(
+                venue_order_id_str,
+                new_price,
+                None,  # losscutPrice - v0.2
+            )
+
+            self.generate_order_updated(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=command.venue_order_id,
+                quantity=command.quantity if command.quantity else None,
+                price=command.price,
+                trigger_price=command.trigger_price,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+        except Exception as e:
+            self._logger.error(f"Modify failed: {e}")
 
     def _handle_ws_message(self, event_type: str, message: str):
         """Handle incoming Private WebSocket message from Rust client."""
@@ -356,7 +412,101 @@ class GmocoinExecutionClient(LiveExecutionClient):
     # Required abstract methods
 
     async def generate_order_status_reports(self, instrument_id=None, client_order_id=None):
-        return []
+        reports = []
+        try:
+            # Determine which symbols to query
+            symbols = set()
+            if instrument_id:
+                symbols.add(instrument_id.symbol.value.split("/")[0])
+            else:
+                for inst in self._instrument_provider.get_all().values() if hasattr(self._instrument_provider.get_all, 'values') else self._instrument_provider.get_all():
+                    symbols.add(inst.id.symbol.value.split("/")[0])
+
+            if not symbols:
+                symbols.add("BTC")
+
+            GMO_ORDER_STATUS_MAP = {
+                "WAITING": OrderStatus.ACCEPTED,
+                "ORDERED": OrderStatus.ACCEPTED,
+                "MODIFYING": OrderStatus.ACCEPTED,
+                "CANCELLING": OrderStatus.PENDING_CANCEL,
+                "CANCELED": OrderStatus.CANCELED,
+                "EXECUTED": OrderStatus.FILLED,
+                "EXPIRED": OrderStatus.EXPIRED,
+            }
+            GMO_ORDER_TYPE_MAP = {
+                "MARKET": OrderType.MARKET,
+                "LIMIT": OrderType.LIMIT,
+                "STOP": OrderType.STOP_MARKET,
+            }
+            GMO_TIF_MAP = {
+                "FAK": TimeInForce.IOC,
+                "FAS": TimeInForce.GTC,
+                "FOK": TimeInForce.FOK,
+                "SOK": TimeInForce.GTC,
+            }
+
+            for symbol in symbols:
+                try:
+                    resp_json = await self._rust_client.get_active_orders(symbol)
+                    resp = json.loads(resp_json)
+                    orders_list = resp if isinstance(resp, list) else resp.get("list", [])
+
+                    for order_data in orders_list:
+                        try:
+                            venue_oid = VenueOrderId(str(order_data.get("orderId")))
+                            side_str = order_data.get("side", "BUY")
+                            order_side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
+
+                            exec_type = order_data.get("executionType", "LIMIT")
+                            order_type = GMO_ORDER_TYPE_MAP.get(exec_type, OrderType.LIMIT)
+
+                            tif_str = order_data.get("timeInForce", "FAS")
+                            time_in_force = GMO_TIF_MAP.get(tif_str, TimeInForce.GTC)
+
+                            status_str = order_data.get("status", "ORDERED")
+                            order_status = GMO_ORDER_STATUS_MAP.get(status_str, OrderStatus.ACCEPTED)
+
+                            size = Decimal(order_data.get("size", "0"))
+                            executed_size = Decimal(order_data.get("executedSize", "0"))
+
+                            price_str = order_data.get("price")
+                            price = Price(Decimal(price_str), precision=0) if price_str else None
+
+                            # Build instrument_id from symbol
+                            from nautilus_trader.model.identifiers import InstrumentId, Symbol
+                            inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+
+                            ts_now = self._clock.timestamp_ns()
+
+                            report = OrderStatusReport(
+                                account_id=self._account_id,
+                                instrument_id=inst_id,
+                                venue_order_id=venue_oid,
+                                order_side=order_side,
+                                order_type=order_type,
+                                time_in_force=time_in_force,
+                                order_status=order_status,
+                                quantity=Quantity(size, precision=8),
+                                filled_qty=Quantity(executed_size, precision=8),
+                                report_id=UUID4(),
+                                ts_accepted=ts_now,
+                                ts_last=ts_now,
+                                ts_init=ts_now,
+                                price=price,
+                            )
+                            reports.append(report)
+                        except Exception as e:
+                            self._logger.warning(f"Failed to parse order report: {e}")
+                            continue
+                except Exception as e:
+                    self._logger.warning(f"Failed to fetch active orders for {symbol}: {e}")
+                    continue
+
+        except Exception as e:
+            self._logger.error(f"Failed to generate order status reports: {e}")
+
+        return reports
 
     async def generate_account_status_reports(self, instrument_id=None, client_order_id=None):
         try:
@@ -429,7 +579,71 @@ class GmocoinExecutionClient(LiveExecutionClient):
             return []
 
     async def generate_fill_reports(self, instrument_id=None, client_order_id=None):
-        return []
+        reports = []
+        try:
+            symbols = set()
+            if instrument_id:
+                symbols.add(instrument_id.symbol.value.split("/")[0])
+            else:
+                for inst in self._instrument_provider.get_all().values() if hasattr(self._instrument_provider.get_all, 'values') else self._instrument_provider.get_all():
+                    symbols.add(inst.id.symbol.value.split("/")[0])
+
+            if not symbols:
+                symbols.add("BTC")
+
+            for symbol in symbols:
+                try:
+                    resp_json = await self._rust_client.get_latest_executions(symbol)
+                    resp = json.loads(resp_json)
+                    exec_list = resp if isinstance(resp, list) else resp.get("list", [])
+
+                    for exec_data in exec_list:
+                        try:
+                            venue_oid = VenueOrderId(str(exec_data.get("orderId")))
+                            trade_id = TradeId(str(exec_data.get("executionId")))
+                            side_str = exec_data.get("side", "BUY")
+                            order_side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
+
+                            exec_size = Decimal(exec_data.get("size", "0"))
+                            exec_price = Decimal(exec_data.get("price", "0"))
+                            fee = Decimal(exec_data.get("fee", "0"))
+
+                            from nautilus_trader.model.identifiers import InstrumentId, Symbol
+                            inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+
+                            instrument = self._instrument_provider.find(inst_id)
+                            quote_currency = JPY
+                            if instrument:
+                                quote_currency = instrument.quote_currency
+
+                            ts_now = self._clock.timestamp_ns()
+
+                            report = FillReport(
+                                account_id=self._account_id,
+                                instrument_id=inst_id,
+                                venue_order_id=venue_oid,
+                                trade_id=trade_id,
+                                order_side=order_side,
+                                last_qty=Quantity(exec_size, precision=8),
+                                last_px=Price(exec_price, precision=0),
+                                commission=Money(fee, quote_currency),
+                                liquidity_side=LiquiditySide.NO_LIQUIDITY_SIDE,
+                                report_id=UUID4(),
+                                ts_event=ts_now,
+                                ts_init=ts_now,
+                            )
+                            reports.append(report)
+                        except Exception as e:
+                            self._logger.warning(f"Failed to parse fill report: {e}")
+                            continue
+                except Exception as e:
+                    self._logger.warning(f"Failed to fetch executions for {symbol}: {e}")
+                    continue
+
+        except Exception as e:
+            self._logger.error(f"Failed to generate fill reports: {e}")
+
+        return reports
 
     async def generate_position_status_reports(self, instrument_id=None):
         return []
