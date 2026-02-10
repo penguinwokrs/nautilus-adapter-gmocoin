@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "nautilus-adapter-gmocoin"
+version = "0.1.0"
+description = "GMO Coin adapter for NautilusTrader"
+requires-python = ">=3.11"
+license = { text = "LGPL-3.0-or-later" }
+dependencies = [
+    "nautilus-trader>=1.204.0",
+]
+
+[tool.maturin]
+python-source = "."
+module-name = "nautilus_gmocoin._nautilus_gmocoin"
+features = ["pyo3/extension-module"]
