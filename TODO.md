@@ -108,30 +108,15 @@
 
 ## 未実装機能の詳細
 
-### 1. Token Bucket レート制限
+### ~~1. Token Bucket レート制限~~ (実装済み)
 
-**優先度: Medium**
+`src/rate_limit.rs` に `TokenBucket` 構造体を実装。REST API (GET/POST) とWebSocket購読に適用。
+Python Config の `rate_limit_per_sec` / `ws_rate_limit_per_sec` で設定可能。
 
-GMOコインAPIにはTier別のレート制限があり、超過すると `ERR-5003 (Request too many)` エラーが返される。
-現在はWebSocket購読間の2秒ディレイで暫定対応。
+- デフォルト: REST 20 req/s (Tier 1), WS 0.5 cmd/s
+- Tier 2設定例: `rate_limit_per_sec=30.0`
 
-| Tier | 対象 | 制限 |
-|------|------|------|
-| Tier 1 (週間取引高 < 10億円) | 全API | GET: 20 req/s, POST: 20 req/s |
-| Tier 2 (週間取引高 ≥ 10億円) | 全API | GET: 30 req/s, POST: 30 req/s |
-| WebSocket | 購読コマンド | 約1コマンド/秒 |
-
-**実装方針:**
-- Rust側に `TokenBucket` 構造体を追加 (`src/rate_limit.rs`)
-- `GmocoinRestClient` の `public_get` / `private_get` / `private_post` に組み込み
-- WebSocket購読にも適用
-- Python Config から設定可能にする
-
-**暫定対応箇所:**
-- `src/client/data_client.rs` (購読間2sディレイ)
-- `src/client/execution_client.rs` (同上)
-
-### 2. アカウント情報系エンドポイント
+### 1. アカウント情報系エンドポイント
 
 **優先度: Low** (NautilusTrader直接連携には不要)
 

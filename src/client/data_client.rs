@@ -9,6 +9,7 @@ use tokio::time::{sleep, Duration};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::model::orderbook::OrderBook;
+use crate::rate_limit::TokenBucket;
 
 #[pyclass]
 #[derive(Clone)]
@@ -19,12 +20,18 @@ pub struct GmocoinDataClient {
     books: Arc<std::sync::Mutex<std::collections::HashMap<String, OrderBook>>>,
     shutdown: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
+    ws_rate_limit: TokenBucket,
 }
 
 #[pymethods]
 impl GmocoinDataClient {
+    /// Create a new GmocoinDataClient.
+    ///
+    /// `ws_rate_limit_per_sec`: WebSocket subscription rate limit (commands/sec).
+    ///   Default 0.5 (1 command per 2 seconds) for safety.
     #[new]
-    pub fn new() -> Self {
+    pub fn new(ws_rate_limit_per_sec: Option<f64>) -> Self {
+        let ws_rate = ws_rate_limit_per_sec.unwrap_or(0.5);
         Self {
             data_callback: Arc::new(std::sync::Mutex::new(None)),
             subscriptions: Arc::new(std::sync::Mutex::new(HashSet::new())),
@@ -32,6 +39,7 @@ impl GmocoinDataClient {
             books: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             shutdown: Arc::new(AtomicBool::new(false)),
             connected: Arc::new(AtomicBool::new(false)),
+            ws_rate_limit: TokenBucket::new(1.0, ws_rate),
         }
     }
 
@@ -47,6 +55,7 @@ impl GmocoinDataClient {
         let books_arc = self.books.clone();
         let shutdown = self.shutdown.clone();
         let connected = self.connected.clone();
+        let ws_rate_limit = self.ws_rate_limit.clone();
 
         shutdown.store(false, Ordering::SeqCst);
         connected.store(false, Ordering::SeqCst);
@@ -61,7 +70,7 @@ impl GmocoinDataClient {
                         .expect("Failed to build tokio runtime for WS");
 
                     rt.block_on(Self::ws_loop(
-                        subs_arc, outgoing_arc, data_cb_arc, books_arc, shutdown, connected,
+                        subs_arc, outgoing_arc, data_cb_arc, books_arc, shutdown, connected, ws_rate_limit,
                     ));
                 })
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -123,6 +132,7 @@ impl GmocoinDataClient {
         books_arc: Arc<std::sync::Mutex<std::collections::HashMap<String, OrderBook>>>,
         shutdown: Arc<AtomicBool>,
         connected: Arc<AtomicBool>,
+        ws_rate_limit: TokenBucket,
     ) {
         let mut backoff_sec = 1u64;
         let max_backoff = 64u64;
@@ -167,12 +177,12 @@ impl GmocoinDataClient {
                     to_send.sort();
                     to_send.dedup();
 
-                    // Send each subscription with 2s delay to avoid GMO Coin rate limit (ERR-5003)
+                    // Send each subscription with rate limiting to avoid GMO Coin ERR-5003
                     for msg in to_send {
+                        ws_rate_limit.acquire().await;
                         if let Err(e) = ws.send(Message::Text(msg)).await {
                             eprintln!("GMO: Failed to send subscribe: {}", e);
                         }
-                        sleep(Duration::from_millis(2000)).await;
                     }
 
                     // Main message loop

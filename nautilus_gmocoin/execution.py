@@ -62,6 +62,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             self.config.api_secret or "",
             self.config.timeout_ms,
             self.config.proxy_url,
+            getattr(self.config, 'rate_limit_per_sec', None),
         )
         self._rust_client.set_order_callback(self._handle_ws_message)
 
@@ -70,6 +71,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             self.config.api_secret or "",
             self.config.timeout_ms,
             self.config.proxy_url,
+            getattr(self.config, 'rate_limit_per_sec', None),
         )
         self.log = logging.getLogger("nautilus.gmocoin.execution")
 

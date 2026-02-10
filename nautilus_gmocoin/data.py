@@ -40,7 +40,9 @@ class GmocoinDataClient(LiveMarketDataClient):
         self._subscribed_instruments = {}  # "BTC" -> Instrument
 
         # Rust clients
-        self._rust_client = gmocoin.GmocoinDataClient()
+        self._rust_client = gmocoin.GmocoinDataClient(
+            getattr(self.config, 'ws_rate_limit_per_sec', None),
+        )
         self._rust_client.set_data_callback(self._handle_rust_data)
 
         self._rest_client = gmocoin.GmocoinRestClient(
@@ -48,6 +50,7 @@ class GmocoinDataClient(LiveMarketDataClient):
             self.config.api_secret or "",
             self.config.timeout_ms,
             self.config.proxy_url,
+            getattr(self.config, 'rate_limit_per_sec', None),
         )
 
     async def _connect(self):

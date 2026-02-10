@@ -24,9 +24,9 @@ pub struct GmocoinExecutionClient {
 #[pymethods]
 impl GmocoinExecutionClient {
     #[new]
-    pub fn new(api_key: String, api_secret: String, timeout_ms: u64, proxy_url: Option<String>) -> Self {
+    pub fn new(api_key: String, api_secret: String, timeout_ms: u64, proxy_url: Option<String>, rate_limit_per_sec: Option<f64>) -> Self {
         Self {
-            rest_client: GmocoinRestClient::new(api_key, api_secret, timeout_ms, proxy_url),
+            rest_client: GmocoinRestClient::new(api_key, api_secret, timeout_ms, proxy_url, rate_limit_per_sec),
             order_callback: Arc::new(std::sync::Mutex::new(None)),
             orders: Arc::new(RwLock::new(HashMap::new())),
             client_oid_map: Arc::new(RwLock::new(HashMap::new())),
@@ -290,9 +290,11 @@ impl GmocoinExecutionClient {
                     eprintln!("GMO: Connected to Private WebSocket");
                     backoff_sec = 5;
 
-                    // Subscribe to execution and order events with 2s delay
+                    // Subscribe to execution and order events with rate limiting
+                    let ws_sub_limiter = crate::rate_limit::TokenBucket::new(1.0, 0.5);
                     let channels = vec!["executionEvents", "orderEvents"];
                     for ch in &channels {
+                        ws_sub_limiter.acquire().await;
                         let sub_msg = serde_json::json!({
                             "command": "subscribe",
                             "channel": ch,
@@ -300,7 +302,6 @@ impl GmocoinExecutionClient {
                         if let Err(e) = ws.send(Message::Text(sub_msg.to_string())).await {
                             eprintln!("GMO: Failed to subscribe to {}: {}", ch, e);
                         }
-                        sleep(Duration::from_millis(2000)).await;
                     }
 
                     // Token refresh tracking

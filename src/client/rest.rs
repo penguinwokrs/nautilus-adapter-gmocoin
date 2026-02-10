@@ -8,6 +8,7 @@ use crate::model::{
     order::{OrdersList, ExecutionsList},
     account::Asset,
 };
+use crate::rate_limit::TokenBucket;
 use std::time::{SystemTime, UNIX_EPOCH};
 use pyo3::prelude::*;
 
@@ -21,12 +22,24 @@ pub struct GmocoinRestClient {
     api_secret: String,
     base_url_public: String,
     base_url_private: String,
+    rate_limit_get: TokenBucket,
+    rate_limit_post: TokenBucket,
 }
 
 #[pymethods]
 impl GmocoinRestClient {
+    /// Create a new GmocoinRestClient.
+    ///
+    /// `rate_limit_per_sec`: API rate limit (requests/sec). Default 20 (Tier 1).
+    ///   GMO Coin Tier 1: 20/s, Tier 2: 30/s.
     #[new]
-    pub fn new(api_key: String, api_secret: String, timeout_ms: u64, proxy_url: Option<String>) -> Self {
+    pub fn new(
+        api_key: String,
+        api_secret: String,
+        timeout_ms: u64,
+        proxy_url: Option<String>,
+        rate_limit_per_sec: Option<f64>,
+    ) -> Self {
         let mut builder = Client::builder()
             .timeout(std::time::Duration::from_millis(timeout_ms));
 
@@ -36,12 +49,16 @@ impl GmocoinRestClient {
             }
         }
 
+        let rate = rate_limit_per_sec.unwrap_or(20.0);
+
         Self {
             client: builder.build().unwrap_or_else(|_| Client::new()),
             api_key,
             api_secret,
             base_url_public: "https://api.coin.z.com/public".to_string(),
             base_url_private: "https://api.coin.z.com/private".to_string(),
+            rate_limit_get: TokenBucket::new(rate, rate),
+            rate_limit_post: TokenBucket::new(rate, rate),
         }
     }
 
@@ -311,6 +328,8 @@ impl GmocoinRestClient {
         endpoint: &str,
         query: Option<&[(&str, &str)]>,
     ) -> Result<T, GmocoinError> {
+        self.rate_limit_get.acquire().await;
+
         let url = format!("{}{}", self.base_url_public, endpoint);
         let mut builder = self.client.get(&url);
         if let Some(q) = query {
@@ -328,6 +347,8 @@ impl GmocoinRestClient {
         &self,
         path_with_query: &str,
     ) -> Result<T, GmocoinError> {
+        self.rate_limit_get.acquire().await;
+
         let url = format!("{}{}", self.base_url_public, path_with_query);
         let response = self.client.get(&url).send().await?;
         let text = response.text().await?;
@@ -340,6 +361,8 @@ impl GmocoinRestClient {
         endpoint: &str,
         query: Option<&[(&str, &str)]>,
     ) -> Result<T, GmocoinError> {
+        self.rate_limit_get.acquire().await;
+
         let timestamp = Self::timestamp_ms();
 
         // GMO Coin GET signature: timestamp + "GET" + path (NO query params in signature)
@@ -385,6 +408,8 @@ impl GmocoinRestClient {
         endpoint: &str,
         body: &str,
     ) -> Result<T, GmocoinError> {
+        self.rate_limit_post.acquire().await;
+
         let timestamp = Self::timestamp_ms();
         let method_str = method.as_str();
 

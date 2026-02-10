@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 mod client;
 mod error;
 mod model;
+mod rate_limit;
 
 #[pymodule]
 fn _nautilus_gmocoin(_py: Python, m: &PyModule) -> PyResult<()> {
