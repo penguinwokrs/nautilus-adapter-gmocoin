@@ -58,6 +58,7 @@ pub struct Depth {
     #[pyo3(get)]
     pub symbol: String,
     #[pyo3(get)]
+    #[serde(default)]
     pub timestamp: String,
 }
 

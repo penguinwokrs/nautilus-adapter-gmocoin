@@ -97,7 +97,7 @@
 | QuoteTick (ticker→bid/ask) | ✅ |
 | TradeTick (trades→price/size/side) | ✅ |
 | OrderBookDeltas (orderbooks→snapshot) | ✅ |
-| Bar (klines→OHLCV) | ❌ `_subscribe_bars` は警告ログのみ |
+| Bar (klines→OHLCV) | ✅ REST klineポーリングで実装 |
 | submit_order (MARKET/LIMIT/STOP + TimeInForce) | ✅ |
 | cancel_order | ✅ |
 | modify_order (changeOrder) | ✅ `ModifyOrder` → `change_order` |
@@ -146,12 +146,12 @@ Python Config の `rate_limit_per_sec` / `ws_rate_limit_per_sec` で設定可能
 GmocoinDataClientConfig(api_key="...", api_secret="...", trades_taker_only=True)
 ```
 
-### 5. `_subscribe_bars` (Bar/OHLCV リアルタイム)
+### ~~5. `_subscribe_bars` (Bar/OHLCV リアルタイム)~~ (実装済み)
 
-**優先度: Low**
+REST `get_klines` のポーリングで実装。NautilusTrader の BarSpecification (1min〜1month) をGMO Coinの
+klineインターバルにマッピングし、インターバルに応じたポーリング間隔で自動取得。
 
-GMOコインにはBar用のWebSocketチャンネルがないため、REST `get_klines` のポーリングまたは
-Tickデータからのローカル集計が必要。現在は警告ログを出力するのみ。
+対応インターバル: 1min, 5min, 10min, 15min, 30min, 1hour, 4hour, 8hour, 12hour, 1day, 1week, 1month
 
 ---
 
@@ -178,7 +178,7 @@ Tickデータからのローカル集計が必要。現在は警告ログを出�
 
 ## その他
 
-- [ ] ユニットテスト作成 (`tests/` ディレクトリ)
+- [x] ユニットテスト作成 (`tests/` ディレクトリ) — 118テスト (constants, types, config, bar_mapping, rust_models, rest_public)
 - [ ] 約定テスト (JPY入金後に小額LIMIT注文 → 約定 → WS通知確認)
 - [ ] エラーハンドリング強化 (ネットワーク断時のリトライ戦略改善)
 - [x] `eprintln!` ログを `tracing` クレートに移行

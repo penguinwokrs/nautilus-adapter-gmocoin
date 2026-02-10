@@ -79,6 +79,39 @@ KLINE_INTERVALS = [
     "1day", "1week", "1month",
 ]
 
+# NautilusTrader BarSpecification (step, aggregation_name) -> GMO Coin interval
+# aggregation_name uses BarAggregation enum name strings
+BAR_SPEC_TO_GMO_INTERVAL = {
+    (1, "MINUTE"): "1min",
+    (5, "MINUTE"): "5min",
+    (10, "MINUTE"): "10min",
+    (15, "MINUTE"): "15min",
+    (30, "MINUTE"): "30min",
+    (1, "HOUR"): "1hour",
+    (4, "HOUR"): "4hour",
+    (8, "HOUR"): "8hour",
+    (12, "HOUR"): "12hour",
+    (1, "DAY"): "1day",
+    (1, "WEEK"): "1week",
+    (1, "MONTH"): "1month",
+}
+
+# Polling interval in seconds per GMO kline interval (how often to fetch new bars)
+BAR_POLL_INTERVALS = {
+    "1min": 10,
+    "5min": 30,
+    "10min": 60,
+    "15min": 60,
+    "30min": 120,
+    "1hour": 300,
+    "4hour": 600,
+    "8hour": 600,
+    "12hour": 600,
+    "1day": 600,
+    "1week": 3600,
+    "1month": 3600,
+}
+
 # Error codes
 ERROR_CODES = {
     0: "OK",

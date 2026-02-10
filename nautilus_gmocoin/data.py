@@ -1,12 +1,15 @@
 import asyncio
 import json
 import logging
-from typing import List
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Dict, List, Optional, Set
 
 from nautilus_trader.live.data_client import LiveMarketDataClient
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.identifiers import ClientId, Venue
 from .config import GmocoinDataClientConfig
+from .constants import BAR_SPEC_TO_GMO_INTERVAL, BAR_POLL_INTERVALS
 
 try:
     from . import _nautilus_gmocoin as gmocoin
@@ -38,6 +41,8 @@ class GmocoinDataClient(LiveMarketDataClient):
         self.config = config
         self._logger = logging.getLogger(__name__)
         self._subscribed_instruments = {}  # "BTC" -> Instrument
+        self._bar_poll_tasks: Dict[str, asyncio.Task] = {}  # bar_type_str -> Task
+        self._bar_last_timestamps: Dict[str, str] = {}  # bar_type_str -> last openTime
 
         # Rust clients
         self._rust_client = gmocoin.GmocoinDataClient(
@@ -64,6 +69,11 @@ class GmocoinDataClient(LiveMarketDataClient):
         self._logger.info("Connected to GMO Coin via Rust client (Public WebSocket)")
 
     async def _disconnect(self):
+        for task in self._bar_poll_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._bar_poll_tasks.clear()
+        self._bar_last_timestamps.clear()
         await self._rust_client.disconnect()
 
     async def subscribe(self, instruments: List[Instrument]):
@@ -285,10 +295,106 @@ class GmocoinDataClient(LiveMarketDataClient):
         pass
 
     async def _subscribe_bars(self, command):
-        self._logger.warning("GMO Coin does not support real-time Bars subscription. Ignoring.")
+        from nautilus_trader.model.data import BarType
+        from nautilus_trader.model.enums import BarAggregation
 
-    async def _unsubscribe_bars(self, instrument_id):
-        pass
+        bar_type = command.bar_type if hasattr(command, 'bar_type') else command
+        spec = bar_type.spec
+        step = spec.step
+        agg_name = BarAggregation(spec.aggregation).name
+
+        gmo_interval = BAR_SPEC_TO_GMO_INTERVAL.get((step, agg_name))
+        if gmo_interval is None:
+            self._logger.warning(
+                f"Unsupported bar specification: {step}-{agg_name}. "
+                f"Supported: {list(BAR_SPEC_TO_GMO_INTERVAL.keys())}"
+            )
+            return
+
+        bar_type_str = str(bar_type)
+        if bar_type_str in self._bar_poll_tasks:
+            self._logger.info(f"Already subscribed to bars: {bar_type_str}")
+            return
+
+        instrument_id = bar_type.instrument_id
+        gmo_symbol = instrument_id.symbol.value.split("/")[0]
+        poll_interval = BAR_POLL_INTERVALS.get(gmo_interval, 60)
+
+        self._logger.info(
+            f"Subscribing to bars: {bar_type_str} (GMO interval={gmo_interval}, poll={poll_interval}s)"
+        )
+
+        task = self.create_task(
+            self._bar_poll_loop(bar_type, gmo_symbol, gmo_interval, poll_interval)
+        )
+        self._bar_poll_tasks[bar_type_str] = task
+
+    async def _unsubscribe_bars(self, command):
+        from nautilus_trader.model.data import BarType
+
+        bar_type = command.bar_type if hasattr(command, 'bar_type') else command
+        bar_type_str = str(bar_type)
+
+        task = self._bar_poll_tasks.pop(bar_type_str, None)
+        if task and not task.done():
+            task.cancel()
+            self._logger.info(f"Unsubscribed from bars: {bar_type_str}")
+
+    async def _bar_poll_loop(self, bar_type, gmo_symbol: str, gmo_interval: str, poll_interval: int):
+        from nautilus_trader.model.data import Bar
+        from nautilus_trader.model.objects import Price, Quantity
+
+        bar_type_str = str(bar_type)
+
+        try:
+            while True:
+                try:
+                    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+                    resp_json = await self._rest_client.get_klines_py(gmo_symbol, gmo_interval, date_str)
+                    klines = json.loads(resp_json)
+
+                    if isinstance(klines, dict):
+                        klines = klines.get("data", klines)
+                    if not isinstance(klines, list):
+                        klines = []
+
+                    last_ts = self._bar_last_timestamps.get(bar_type_str)
+
+                    for kline in klines:
+                        open_time = str(kline.get("openTime", ""))
+                        if not open_time:
+                            continue
+
+                        if last_ts and open_time <= last_ts:
+                            continue
+
+                        ts_event = int(open_time) * 1_000_000  # ms -> ns
+                        ts_init = self._clock.timestamp_ns()
+
+                        bar = Bar(
+                            bar_type=bar_type,
+                            open=Price.from_str(str(kline["open"])),
+                            high=Price.from_str(str(kline["high"])),
+                            low=Price.from_str(str(kline["low"])),
+                            close=Price.from_str(str(kline["close"])),
+                            volume=Quantity.from_str(str(kline["volume"])),
+                            ts_event=ts_event,
+                            ts_init=ts_init,
+                        )
+                        self._handle_data(bar)
+                        self._bar_last_timestamps[bar_type_str] = open_time
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self._logger.error(f"Error polling bars for {bar_type_str}: {e}")
+
+                await asyncio.sleep(poll_interval)
+
+        except asyncio.CancelledError:
+            self._logger.info(f"Bar polling stopped for {bar_type_str}")
+        except Exception as e:
+            self._logger.error(f"Bar poll loop crashed for {bar_type_str}: {e}")
 
     async def _unsubscribe_order_book_snapshots(self, instrument_id):
         pass
