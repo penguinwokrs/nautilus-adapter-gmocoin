@@ -1,0 +1,191 @@
+# - PR: テストを実行（マージ制限に使用）
+# - main への push: テスト・ビルド・リリースを実行
+
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    # 全ブランチへの PR でテストを実行（main 以外への PR も対象）
+
+permissions:
+  contents: write  # Release 作成とアーティファクトアップロードに必要
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build and install package
+        run: |
+          pip install maturin
+          maturin build --release -i python3.11 --out dist
+          pip install dist/*.whl
+
+      - name: Install test dependencies
+        run: pip install pytest nautilus-trader
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  build:
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux (manylinux) - サーバー運用で最も一般的
+          - platform: linux
+            runner: ubuntu-22.04
+            target: x86_64
+          - platform: linux
+            runner: ubuntu-22.04
+            target: aarch64
+          # macOS
+          - platform: macos
+            runner: macos-14
+            target: aarch64
+          - platform: macos
+            runner: macos-14-intel
+            target: x86_64
+          # Windows
+          - platform: windows
+            runner: windows-latest
+            target: x64
+            python_arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (Linux aarch64)
+        if: matrix.platform == 'linux' && matrix.target == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.python_arch || 'x64' }}
+
+      - name: Build wheels (Linux)
+        if: matrix.platform == 'linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist -i python3.11
+          target: ${{ matrix.target }}
+          manylinux: auto
+
+      - name: Build wheels (macOS)
+        if: matrix.platform == 'macos'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist -i python3.11
+          target: ${{ matrix.target }}
+
+      - name: Build wheels (Windows)
+        if: matrix.platform == 'windows'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist -i python3.11
+          target: ${{ matrix.target }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform }}-${{ matrix.target }}
+          path: dist/
+
+  sdist:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+  release:
+    if: github.event_name == 'push'
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [test, build, sdist]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version and short SHA
+        id: vars
+        run: |
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          SHORT_SHA=${GITHUB_SHA::7}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect wheels and sdist
+        run: |
+          mkdir -p release-packages
+          find artifacts -name "*.whl" -exec cp {} release-packages/ \;
+          find artifacts -name "*.tar.gz" -exec cp {} release-packages/ \;
+          ls -la release-packages/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.vars.outputs.version }}-${{ steps.vars.outputs.short_sha }}
+          name: v${{ steps.vars.outputs.version }} (${{ steps.vars.outputs.short_sha }})
+          body: |
+            ## NautilusTrader GMO Coin Adapter
+
+            main ブランチへのマージにより自動ビルドされた成果物です。
+
+            ### インストール方法
+
+            1. この Release の Assets からお使いの環境用の wheel をダウンロード
+            2. 以下でインストール:
+            ```bash
+            pip install nautilus_adapter_gmocoin-*.whl
+            ```
+            または sdist からビルド:
+            ```bash
+            pip install nautilus_adapter_gmocoin-*.tar.gz
+            ```
+
+            ### プラットフォーム
+
+            - Linux x86_64, aarch64 (manylinux)
+            - macOS x86_64, aarch64 (Apple Silicon)
+            - Windows x64
+
+            ### Python バージョン
+
+            Python 3.11 以上
+          draft: false
+          prerelease: false
+          files: release-packages/*
+          generate_release_notes: true
