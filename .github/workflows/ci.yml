@@ -27,10 +27,12 @@ jobs:
       - name: Build and install package
         run: |
           pip install maturin
-          maturin develop --release
+          maturin build --release --out dist
+          pip install dist/*.whl
 
       - name: Install test dependencies
         run: pip install pytest nautilus-trader
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest $GITHUB_WORKSPACE/tests/ -v --tb=short
