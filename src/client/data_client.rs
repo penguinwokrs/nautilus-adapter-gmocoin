@@ -2,7 +2,6 @@ use pyo3::prelude::*;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use url::Url;
 use serde_json::Value;
 use std::collections::HashSet;
 use tokio::time::{sleep, Duration};
@@ -12,10 +11,10 @@ use tracing::{info, warn, error};
 use crate::model::orderbook::OrderBook;
 use crate::rate_limit::TokenBucket;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct GmocoinDataClient {
-    data_callback: Arc<std::sync::Mutex<Option<PyObject>>>,
+    data_callback: Arc<std::sync::Mutex<Option<Py<PyAny>>>>,
     /// (channel, symbol, option) - option is e.g. "TAKER_ONLY" for trades
     subscriptions: Arc<std::sync::Mutex<HashSet<(String, String, String)>>>,
     outgoing: Arc<std::sync::Mutex<Vec<String>>>,
@@ -45,12 +44,12 @@ impl GmocoinDataClient {
         }
     }
 
-    pub fn set_data_callback(&self, callback: PyObject) {
+    pub fn set_data_callback(&self, callback: Py<PyAny>) {
         let mut lock = self.data_callback.lock().unwrap();
         *lock = Some(callback);
     }
 
-    pub fn connect(&self, py: Python) -> PyResult<PyObject> {
+    pub fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let data_cb_arc = self.data_callback.clone();
         let subs_arc = self.subscriptions.clone();
         let outgoing_arc = self.outgoing.clone();
@@ -82,12 +81,12 @@ impl GmocoinDataClient {
             Ok("Connected")
         };
 
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     /// Subscribe to a channel for a symbol, with an optional option (e.g. "TAKER_ONLY" for trades).
     #[pyo3(signature = (channel, symbol, option = None))]
-    pub fn subscribe(&self, py: Python, channel: String, symbol: String, option: Option<String>) -> PyResult<PyObject> {
+    pub fn subscribe<'py>(&self, py: Python<'py>, channel: String, symbol: String, option: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         let subs_arc = self.subscriptions.clone();
         let outgoing_arc = self.outgoing.clone();
         let connected = self.connected.clone();
@@ -111,16 +110,16 @@ impl GmocoinDataClient {
             Ok("Subscribe command stored")
         };
 
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn disconnect(&self, py: Python) -> PyResult<PyObject> {
+    pub fn disconnect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let shutdown = self.shutdown.clone();
         let future = async move {
             shutdown.store(true, Ordering::SeqCst);
             Ok("Disconnected")
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 }
 
@@ -142,7 +141,7 @@ impl GmocoinDataClient {
     async fn ws_loop(
         subs_arc: Arc<std::sync::Mutex<HashSet<(String, String, String)>>>,
         outgoing_arc: Arc<std::sync::Mutex<Vec<String>>>,
-        data_cb_arc: Arc<std::sync::Mutex<Option<PyObject>>>,
+        data_cb_arc: Arc<std::sync::Mutex<Option<Py<PyAny>>>>,
         books_arc: Arc<std::sync::Mutex<std::collections::HashMap<String, OrderBook>>>,
         shutdown: Arc<AtomicBool>,
         connected: Arc<AtomicBool>,
@@ -154,9 +153,9 @@ impl GmocoinDataClient {
         loop {
             if shutdown.load(Ordering::SeqCst) { return; }
 
-            let url = Url::parse("wss://api.coin.z.com/ws/public/v1").unwrap();
+            let ws_url = "wss://api.coin.z.com/ws/public/v1";
 
-            match connect_async(url).await {
+            match connect_async(ws_url).await {
                 Ok((mut ws, _)) => {
                     info!("GMO: Connected to Public WebSocket");
                     backoff_sec = 1;
@@ -190,7 +189,7 @@ impl GmocoinDataClient {
                     // Send each subscription with rate limiting to avoid GMO Coin ERR-5003
                     for msg in to_send {
                         ws_rate_limit.acquire().await;
-                        if let Err(e) = ws.send(Message::Text(msg)).await {
+                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
                             error!("GMO: Failed to send subscribe: {}", e);
                         }
                     }
@@ -209,16 +208,17 @@ impl GmocoinDataClient {
                                 {
                                     let mut queue = outgoing_arc.lock().unwrap();
                                     for msg in queue.drain(..) {
-                                        if let Err(e) = ws.send(Message::Text(msg)).await {
+                                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
                                             error!("GMO: Failed to send msg: {}", e);
                                         }
                                     }
                                 }
 
-                                if let Ok(val) = serde_json::from_str::<Value>(&txt) {
+                                let txt_str: &str = txt.as_ref();
+                                if let Ok(val) = serde_json::from_str::<Value>(txt_str) {
                                     // Check for error responses (ERR-5003 rate limit, etc.)
                                     if val.get("error").is_some() {
-                                        warn!("GMO: WS error response: {}", txt);
+                                        warn!("GMO: WS error response: {}", txt_str);
                                         continue;
                                     }
 
@@ -236,7 +236,7 @@ impl GmocoinDataClient {
                                 {
                                     let mut queue = outgoing_arc.lock().unwrap();
                                     for msg in queue.drain(..) {
-                                        if let Err(e) = ws.send(Message::Text(msg)).await {
+                                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
                                             error!("GMO: Failed to send msg: {}", e);
                                         }
                                     }
@@ -275,19 +275,19 @@ impl GmocoinDataClient {
     fn dispatch_message(
         channel: &str,
         val: Value,
-        data_cb_arc: &Arc<std::sync::Mutex<Option<PyObject>>>,
+        data_cb_arc: &Arc<std::sync::Mutex<Option<Py<PyAny>>>>,
         books_arc: &Arc<std::sync::Mutex<std::collections::HashMap<String, OrderBook>>>,
     ) {
         match channel {
             "ticker" => {
                 if let Ok(ticker) = serde_json::from_value::<crate::model::market_data::Ticker>(val) {
-                    let cb_opt = { data_cb_arc.lock().unwrap().clone() };
-                    if let Some(cb) = cb_opt {
-                        Python::with_gil(|py| {
-                            let py_obj = ticker.into_py(py);
-                            let _ = cb.call1(py, ("ticker", py_obj));
-                        });
-                    }
+                    Python::try_attach(|py| {
+                        let lock = data_cb_arc.lock().unwrap();
+                        if let Some(cb) = lock.as_ref() {
+                            let py_obj = Py::new(py, ticker).expect("Failed to create Python object");
+                            let _ = cb.call1(py, ("ticker", py_obj)).ok();
+                        }
+                    });
                 }
             }
             "orderbooks" => {
@@ -301,24 +301,24 @@ impl GmocoinDataClient {
                         book.clone()
                     };
 
-                    let cb_opt = { data_cb_arc.lock().unwrap().clone() };
-                    if let Some(cb) = cb_opt {
-                        Python::with_gil(|py| {
-                            let py_obj = book_clone.into_py(py);
-                            let _ = cb.call1(py, ("orderbooks", py_obj));
-                        });
-                    }
+                    Python::try_attach(|py| {
+                        let lock = data_cb_arc.lock().unwrap();
+                        if let Some(cb) = lock.as_ref() {
+                            let py_obj = Py::new(py, book_clone).expect("Failed to create Python object");
+                            let _ = cb.call1(py, ("orderbooks", py_obj)).ok();
+                        }
+                    });
                 }
             }
             "trades" => {
                 if let Ok(trade) = serde_json::from_value::<crate::model::market_data::Trade>(val) {
-                    let cb_opt = { data_cb_arc.lock().unwrap().clone() };
-                    if let Some(cb) = cb_opt {
-                        Python::with_gil(|py| {
-                            let py_obj = trade.into_py(py);
-                            let _ = cb.call1(py, ("trades", py_obj));
-                        });
-                    }
+                    Python::try_attach(|py| {
+                        let lock = data_cb_arc.lock().unwrap();
+                        if let Some(cb) = lock.as_ref() {
+                            let py_obj = Py::new(py, trade).expect("Failed to create Python object");
+                            let _ = cb.call1(py, ("trades", py_obj)).ok();
+                        }
+                    });
                 }
             }
             _ => {}

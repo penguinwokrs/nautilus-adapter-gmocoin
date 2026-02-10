@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use pyo3::prelude::*;
 use crate::model::market_data::Depth;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct OrderBook {
     #[pyo3(get)]

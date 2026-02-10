@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct GmocoinRestClient {
     client: Client,
@@ -64,36 +64,36 @@ impl GmocoinRestClient {
 
     // ========== Public API (Python) ==========
 
-    pub fn get_status_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_status_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let res: serde_json::Value = client.public_get("/v1/status", None).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_ticker_py(&self, py: Python, symbol: Option<String>) -> PyResult<PyObject> {
+    pub fn get_ticker_py<'py>(&self, py: Python<'py>, symbol: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let query = symbol.as_ref().map(|s| vec![("symbol", s.as_str())]);
             let res: Vec<Ticker> = client.public_get("/v1/ticker", query.as_deref()).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_orderbooks_py(&self, py: Python, symbol: String) -> PyResult<PyObject> {
+    pub fn get_orderbooks_py<'py>(&self, py: Python<'py>, symbol: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let query = vec![("symbol", symbol.as_str())];
             let res: Depth = client.public_get("/v1/orderbooks", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_trades_py(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+    pub fn get_trades_py<'py>(&self, py: Python<'py>, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut query_owned: Vec<(String, String)> = vec![("symbol".to_string(), symbol)];
@@ -103,40 +103,40 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.public_get("/v1/trades", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_klines_py(&self, py: Python, symbol: String, interval: String, date: String) -> PyResult<PyObject> {
+    pub fn get_klines_py<'py>(&self, py: Python<'py>, symbol: String, interval: String, date: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let path = format!("/v1/klines?symbol={}&interval={}&date={}", symbol, interval, date);
             let res: serde_json::Value = client.public_get_raw(&path).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_symbols_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_symbols_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let res: Vec<SymbolInfo> = client.public_get("/v1/symbols", None).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     // ========== Private API (Python) ==========
 
-    pub fn get_assets_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_assets_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let res: Vec<Asset> = client.private_get("/v1/account/assets", None).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_active_orders_py(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+    pub fn get_active_orders_py<'py>(&self, py: Python<'py>, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut query_owned: Vec<(String, String)> = vec![("symbol".to_string(), symbol)];
@@ -146,20 +146,20 @@ impl GmocoinRestClient {
             let res: OrdersList = client.private_get("/v1/activeOrders", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_executions_py(&self, py: Python, order_id: String) -> PyResult<PyObject> {
+    pub fn get_executions_py<'py>(&self, py: Python<'py>, order_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let query = vec![("orderId", order_id.as_str())];
             let res: ExecutionsList = client.private_get("/v1/executions", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_latest_executions_py(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+    pub fn get_latest_executions_py<'py>(&self, py: Python<'py>, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut query_owned: Vec<(String, String)> = vec![("symbol".to_string(), symbol)];
@@ -169,15 +169,15 @@ impl GmocoinRestClient {
             let res: ExecutionsList = client.private_get("/v1/latestExecutions", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     // ========== Order API (Python) ==========
 
     #[pyo3(signature = (symbol, side, execution_type, size, price=None, time_in_force=None, cancel_before=None, losscut_price=None, settle_type=None))]
-    pub fn post_order_py(
+    pub fn post_order_py<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         side: String,
         execution_type: String,
@@ -187,7 +187,7 @@ impl GmocoinRestClient {
         cancel_before: Option<bool>,
         losscut_price: Option<String>,
         settle_type: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut body = serde_json::json!({
@@ -206,16 +206,16 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.private_post("/v1/order", &body_str).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn post_change_order_py(
+    pub fn post_change_order_py<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         order_id: String,
         price: String,
         losscut_price: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut body = serde_json::json!({
@@ -228,25 +228,25 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.private_post("/v1/changeOrder", &body_str).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn post_cancel_order_py(&self, py: Python, order_id: String) -> PyResult<PyObject> {
+    pub fn post_cancel_order_py<'py>(&self, py: Python<'py>, order_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let body = serde_json::json!({"orderId": order_id}).to_string();
             let res: serde_json::Value = client.private_post("/v1/cancelOrder", &body).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn post_cancel_bulk_order_py(
+    pub fn post_cancel_bulk_order_py<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbols: Vec<String>,
         side: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut body = serde_json::json!({"symbols": symbols});
@@ -256,60 +256,60 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.private_post("/v1/cancelBulkOrder", &body_str).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     // ========== WS Auth (Python) ==========
 
-    pub fn post_ws_auth_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn post_ws_auth_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let res: serde_json::Value = client.private_post("/v1/ws-auth", "").await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn post_cancel_orders_py(&self, py: Python, order_ids: Vec<u64>) -> PyResult<PyObject> {
+    pub fn post_cancel_orders_py<'py>(&self, py: Python<'py>, order_ids: Vec<u64>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let res = client.cancel_orders(&order_ids).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn delete_ws_auth_py(&self, py: Python, token: String) -> PyResult<PyObject> {
+    pub fn delete_ws_auth_py<'py>(&self, py: Python<'py>, token: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             client.delete_ws_auth(&token).await.map_err(PyErr::from)?;
             Ok("ok".to_string())
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn put_ws_auth_py(&self, py: Python, token: String) -> PyResult<PyObject> {
+    pub fn put_ws_auth_py<'py>(&self, py: Python<'py>, token: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let body = serde_json::json!({"token": token}).to_string();
             let res: serde_json::Value = client.private_put("/v1/ws-auth", &body).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     // ========== Position API (Python) ==========
 
-    pub fn get_margin_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_margin_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let res: Margin = client.private_get("/v1/account/margin", None).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_open_positions_py(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+    pub fn get_open_positions_py<'py>(&self, py: Python<'py>, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut query_owned: Vec<(String, String)> = vec![("symbol".to_string(), symbol)];
@@ -319,10 +319,10 @@ impl GmocoinRestClient {
             let res: PositionsList = client.private_get("/v1/openPositions", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_position_summary_py(&self, py: Python, symbol: Option<String>) -> PyResult<PyObject> {
+    pub fn get_position_summary_py<'py>(&self, py: Python<'py>, symbol: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let query_owned: Vec<(String, String)> = if let Some(s) = symbol {
@@ -335,20 +335,20 @@ impl GmocoinRestClient {
             let res: PositionSummaryList = client.private_get("/v1/positionSummary", q).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     #[pyo3(signature = (symbol, side, execution_type, settle_position, price=None, time_in_force=None))]
-    pub fn post_close_order_py(
+    pub fn post_close_order_py<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         side: String,
         execution_type: String,
         settle_position: Vec<(u64, String)>,
         price: Option<String>,
         time_in_force: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let positions: Vec<serde_json::Value> = settle_position.iter()
@@ -367,20 +367,20 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.private_post("/v1/closeOrder", &body_str).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     #[pyo3(signature = (symbol, side, execution_type, size, price=None, time_in_force=None))]
-    pub fn post_close_bulk_order_py(
+    pub fn post_close_bulk_order_py<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         side: String,
         execution_type: String,
         size: String,
         price: Option<String>,
         time_in_force: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let mut body = serde_json::json!({
@@ -396,10 +396,10 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.private_post("/v1/closeBulkOrder", &body_str).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn put_losscut_price_py(&self, py: Python, position_id: u64, losscut_price: String) -> PyResult<PyObject> {
+    pub fn put_losscut_price_py<'py>(&self, py: Python<'py>, position_id: u64, losscut_price: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let body = serde_json::json!({
@@ -409,17 +409,17 @@ impl GmocoinRestClient {
             let res: serde_json::Value = client.private_put("/v1/changeLosscutPrice", &body).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_order_py(&self, py: Python, order_id: String) -> PyResult<PyObject> {
+    pub fn get_order_py<'py>(&self, py: Python<'py>, order_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
             let query = vec![("orderId", order_id.as_str())];
             let res: OrdersList = client.private_get("/v1/orders", Some(&query)).await.map_err(PyErr::from)?;
             serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 }
 

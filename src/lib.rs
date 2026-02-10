@@ -8,7 +8,7 @@ mod model;
 mod rate_limit;
 
 #[pymodule]
-fn _nautilus_gmocoin(_py: Python, m: &PyModule) -> PyResult<()> {
+fn _nautilus_gmocoin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<client::rest::GmocoinRestClient>()?;
     m.add_class::<client::data_client::GmocoinDataClient>()?;
     m.add_class::<client::execution_client::GmocoinExecutionClient>()?;

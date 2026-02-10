@@ -4,7 +4,6 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures_util::{SinkExt, StreamExt};
-use url::Url;
 use pyo3::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn, error};
@@ -15,7 +14,7 @@ use crate::model::order::Order;
 pub struct GmocoinExecutionClient {
     rest_client: GmocoinRestClient,
     // Callback for order/execution/asset updates: (event_type, data_json)
-    order_callback: Arc<std::sync::Mutex<Option<PyObject>>>,
+    order_callback: Arc<std::sync::Mutex<Option<Py<PyAny>>>>,
     // Order state tracking
     orders: Arc<RwLock<HashMap<u64, Order>>>,
     client_oid_map: Arc<RwLock<HashMap<String, u64>>>,
@@ -35,13 +34,13 @@ impl GmocoinExecutionClient {
         }
     }
 
-    pub fn set_order_callback(&self, callback: PyObject) {
+    pub fn set_order_callback(&self, callback: Py<PyAny>) {
         let mut lock = self.order_callback.lock().unwrap();
         *lock = Some(callback);
     }
 
     /// Connect to Private WebSocket (with token refresh loop)
-    pub fn connect(&self, py: Python) -> PyResult<PyObject> {
+    pub fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let order_cb_arc = self.order_callback.clone();
         let orders_arc = self.orders.clone();
@@ -69,15 +68,15 @@ impl GmocoinExecutionClient {
             Ok("Connected")
         };
 
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
     // ========== Order Operations (Python) ==========
 
     #[pyo3(signature = (symbol, amount, side, execution_type, client_order_id, price=None, time_in_force=None, cancel_before=None, losscut_price=None, settle_type=None))]
-    pub fn submit_order(
+    pub fn submit_order<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         amount: String,
         side: String,
@@ -88,7 +87,7 @@ impl GmocoinExecutionClient {
         cancel_before: Option<bool>,
         losscut_price: Option<String>,
         settle_type: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let client_oid_map_arc = self.client_oid_map.clone();
 
@@ -115,10 +114,10 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&result)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn cancel_order(&self, py: Python, _symbol: String, order_id: String) -> PyResult<PyObject> {
+    pub fn cancel_order<'py>(&self, py: Python<'py>, _symbol: String, order_id: String) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let oid = order_id.parse::<u64>().map_err(|e| {
@@ -129,10 +128,10 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_order(&self, py: Python, order_id: String) -> PyResult<PyObject> {
+    pub fn get_order<'py>(&self, py: Python<'py>, order_id: String) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let oid = order_id.parse::<u64>().map_err(|e| {
@@ -143,10 +142,10 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_executions(&self, py: Python, order_id: String) -> PyResult<PyObject> {
+    pub fn get_executions<'py>(&self, py: Python<'py>, order_id: String) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let oid = order_id.parse::<u64>().map_err(|e| {
@@ -160,16 +159,16 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn change_order(
+    pub fn change_order<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         order_id: String,
         price: String,
         losscut_price: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let oid = order_id.parse::<u64>().map_err(|e| {
@@ -184,14 +183,14 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn cancel_orders(
+    pub fn cancel_orders<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         order_ids: Vec<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let oids: Vec<u64> = order_ids.iter()
@@ -208,16 +207,16 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_active_orders(
+    pub fn get_active_orders<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         page: Option<i32>,
         count: Option<i32>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let res = rest_client
@@ -227,16 +226,16 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_latest_executions(
+    pub fn get_latest_executions<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         page: Option<i32>,
         count: Option<i32>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let rest_client = self.rest_client.clone();
         let future = async move {
             let res = rest_client
@@ -246,56 +245,56 @@ impl GmocoinExecutionClient {
             serde_json::to_string(&res)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
-        pyo3_asyncio::tokio::future_into_py(py, future).map(|f| f.into())
+        pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
-    pub fn get_assets_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_assets_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.get_assets_py(py)
     }
 
     // ========== Position Operations (Python) ==========
 
-    pub fn get_margin_py(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_margin_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.get_margin_py(py)
     }
 
-    pub fn get_open_positions(&self, py: Python, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<PyObject> {
+    pub fn get_open_positions<'py>(&self, py: Python<'py>, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.get_open_positions_py(py, symbol, page, count)
     }
 
-    pub fn get_position_summary(&self, py: Python, symbol: Option<String>) -> PyResult<PyObject> {
+    pub fn get_position_summary<'py>(&self, py: Python<'py>, symbol: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.get_position_summary_py(py, symbol)
     }
 
     #[pyo3(signature = (symbol, side, execution_type, settle_position, price=None, time_in_force=None))]
-    pub fn close_order(
+    pub fn close_order<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         side: String,
         execution_type: String,
         settle_position: Vec<(u64, String)>,
         price: Option<String>,
         time_in_force: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.post_close_order_py(py, symbol, side, execution_type, settle_position, price, time_in_force)
     }
 
     #[pyo3(signature = (symbol, side, execution_type, size, price=None, time_in_force=None))]
-    pub fn close_bulk_order(
+    pub fn close_bulk_order<'py>(
         &self,
-        py: Python,
+        py: Python<'py>,
         symbol: String,
         side: String,
         execution_type: String,
         size: String,
         price: Option<String>,
         time_in_force: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.post_close_bulk_order_py(py, symbol, side, execution_type, size, price, time_in_force)
     }
 
-    pub fn change_losscut_price(&self, py: Python, position_id: u64, losscut_price: String) -> PyResult<PyObject> {
+    pub fn change_losscut_price<'py>(&self, py: Python<'py>, position_id: u64, losscut_price: String) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.put_losscut_price_py(py, position_id, losscut_price)
     }
 }
@@ -303,7 +302,7 @@ impl GmocoinExecutionClient {
 impl GmocoinExecutionClient {
     async fn ws_loop(
         rest_client: GmocoinRestClient,
-        order_cb_arc: Arc<std::sync::Mutex<Option<PyObject>>>,
+        order_cb_arc: Arc<std::sync::Mutex<Option<Py<PyAny>>>>,
         orders_arc: Arc<RwLock<HashMap<u64, Order>>>,
         shutdown: Arc<AtomicBool>,
     ) {
@@ -328,16 +327,8 @@ impl GmocoinExecutionClient {
 
             // 2. Connect to Private WS
             let ws_url = format!("wss://api.coin.z.com/ws/private/v1/{}", token);
-            let url = match Url::parse(&ws_url) {
-                Ok(u) => u,
-                Err(e) => {
-                    error!("GMO: Invalid Private WS URL: {}. Retrying in 5s...", e);
-                    sleep(Duration::from_secs(5)).await;
-                    continue;
-                }
-            };
 
-            match connect_async(url).await {
+            match connect_async(ws_url.as_str()).await {
                 Ok((mut ws, _)) => {
                     info!("GMO: Connected to Private WebSocket");
                     backoff_sec = 5;
@@ -351,7 +342,7 @@ impl GmocoinExecutionClient {
                             "command": "subscribe",
                             "channel": ch,
                         });
-                        if let Err(e) = ws.send(Message::Text(sub_msg.to_string())).await {
+                        if let Err(e) = ws.send(Message::Text(sub_msg.to_string().into())).await {
                             error!("GMO: Failed to subscribe to {}: {}", ch, e);
                         }
                     }
@@ -379,7 +370,8 @@ impl GmocoinExecutionClient {
 
                         match ws.next().await {
                             Some(Ok(Message::Text(txt))) => {
-                                Self::process_ws_message(&txt, &order_cb_arc, &orders_arc).await;
+                                let txt_str: &str = txt.as_ref();
+                                Self::process_ws_message(txt_str, &order_cb_arc, &orders_arc).await;
                             }
                             Some(Ok(Message::Ping(data))) => {
                                 let _ = ws.send(Message::Pong(data)).await;
@@ -413,7 +405,7 @@ impl GmocoinExecutionClient {
 
     async fn process_ws_message(
         msg_json: &str,
-        order_cb_arc: &Arc<std::sync::Mutex<Option<PyObject>>>,
+        order_cb_arc: &Arc<std::sync::Mutex<Option<Py<PyAny>>>>,
         orders_arc: &Arc<RwLock<HashMap<u64, Order>>>,
     ) {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(msg_json) {
@@ -442,15 +434,12 @@ impl GmocoinExecutionClient {
             }
 
             // Call Python callback
-            let cb_opt = {
+            Python::try_attach(|py| {
                 let lock = order_cb_arc.lock().unwrap();
-                lock.clone()
-            };
-            if let Some(cb) = cb_opt {
-                Python::with_gil(|py| {
-                    let _ = cb.call1(py, (event_type, msg_json.to_string()));
-                });
-            }
+                if let Some(cb) = lock.as_ref() {
+                    let _ = cb.call1(py, (event_type, msg_json.to_string())).ok();
+                }
+            });
         }
     }
 }

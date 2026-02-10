@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use pyo3::prelude::*;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Ticker {
     #[pyo3(get)]
@@ -39,7 +39,7 @@ impl Ticker {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DepthEntry {
     #[pyo3(get)]
@@ -48,7 +48,7 @@ pub struct DepthEntry {
     pub size: String,
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Depth {
     #[pyo3(get)]
@@ -70,7 +70,7 @@ impl Depth {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Trade {
     #[pyo3(get)]
@@ -94,7 +94,7 @@ impl Trade {
 }
 
 /// Symbol info from GET /v1/symbols
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct SymbolInfo {
     #[pyo3(get)]
