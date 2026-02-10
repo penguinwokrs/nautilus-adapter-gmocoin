@@ -16,7 +16,7 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -42,10 +42,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-22.04
             target: x86_64
-          - runner: ubuntu-24.04
+            manylinux: "2_28"
+          - runner: ubuntu-22.04
             target: aarch64
+            manylinux: "2_28"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +66,7 @@ jobs:
           command: build
           args: --release --out dist -i python3.11
           target: ${{ matrix.target }}
-          manylinux: auto
+          manylinux: ${{ matrix.manylinux }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -74,7 +76,7 @@ jobs:
 
   sdist:
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -93,7 +95,7 @@ jobs:
   release:
     if: github.event_name == 'push'
     name: Create Release
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     needs: [test, build, sdist]
     steps:
       - uses: actions/checkout@v4
