@@ -23,59 +23,33 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get next version tag
-        id: version
+      - name: Check version and create tag
+        id: tag_check
         run: |
-          # Get latest tag matching v*
-          LATEST=$(git tag -l "v*" | sort -V | tail -1)
-          if [ -z "$LATEST" ]; then
-            # No tags yet, use base version from pyproject.toml
-            BASE=$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
-            NEW_TAG="v${BASE}"
-          else
-            # Parse version and increment patch
-            if [[ $LATEST =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-              MAJOR="${BASH_REMATCH[1]}"
-              MINOR="${BASH_REMATCH[2]}"
-              PATCH="${BASH_REMATCH[3]}"
-              NEW_PATCH=$((PATCH + 1))
-              NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-            else
-              # Fallback: append build number
-              NEW_TAG="${LATEST}.${GITHUB_RUN_NUMBER}"
-            fi
-          fi
-          # Skip if HEAD is already tagged (avoid duplicate on re-run)
-          if git describe --exact-match --tags HEAD 2>/dev/null; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${NEW_TAG}" >> $GITHUB_OUTPUT
-            # version without 'v' prefix for pyproject.toml / Cargo.toml
-            NEW_VERSION="${NEW_TAG#v}"
-            echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
+          # Get version from pyproject.toml
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          TAG="v$VERSION"
+          
+          echo "Detected version: $VERSION"
+          echo "Target tag: $TAG"
 
-      - name: Update version in pyproject.toml and Cargo.toml
-        if: steps.version.outputs.skip != 'true'
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          sed -i 's/^version = ".*"/version = "'"${VERSION}"'"/' pyproject.toml
-          sed -i 's/^version = ".*"/version = "'"${VERSION}"'"/' Cargo.toml
-
-      - name: Commit and push version update
-        if: steps.version.outputs.skip != 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml Cargo.toml
-          git diff --staged --quiet || git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
-          git push origin HEAD:main
+          # Check if tag exists
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Skipping."
+            echo "create_tag=false" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $TAG does not exist. Creating."
+            echo "create_tag=true" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create and push tag
-        if: steps.version.outputs.skip != 'true'
+        if: steps.tag_check.outputs.create_tag == 'true'
         run: |
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          TAG="${{ steps.tag_check.outputs.tag_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
