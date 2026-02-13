@@ -16,7 +16,10 @@ from nautilus_trader.model.enums import (
     OrderSide, OrderType, OmsType, AccountType, OrderStatus,
     TimeInForce, LiquiditySide,
 )
-from nautilus_trader.execution.messages import SubmitOrder, CancelOrder, ModifyOrder
+from nautilus_trader.execution.messages import (
+    SubmitOrder, CancelOrder, ModifyOrder,
+    GenerateOrderStatusReports, GenerateFillReports, GeneratePositionStatusReports,
+)
 from nautilus_trader.execution.reports import OrderStatusReport, FillReport, PositionStatusReport
 from nautilus_trader.model.identifiers import TradeId, PositionId
 from nautilus_trader.model.objects import Price, Quantity
@@ -430,9 +433,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
     # Required abstract methods
 
-    async def generate_order_status_reports(self, instrument_id=None, client_order_id=None):
+    async def generate_order_status_reports(self, command: GenerateOrderStatusReports) -> list[OrderStatusReport]:
         reports = []
         try:
+            instrument_id = command.instrument_id
             # Determine which symbols to query
             symbols = set()
             if instrument_id:
@@ -597,9 +601,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
             self._logger.error(f"Failed to generate account status reports: {e}", exc_info=True)
             return []
 
-    async def generate_fill_reports(self, instrument_id=None, client_order_id=None):
+    async def generate_fill_reports(self, command: GenerateFillReports) -> list[FillReport]:
         reports = []
         try:
+            instrument_id = command.instrument_id
             symbols = set()
             if instrument_id:
                 symbols.add(instrument_id.symbol.value.split("/")[0])
@@ -664,9 +669,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         return reports
 
-    async def generate_position_status_reports(self, instrument_id=None):
+    async def generate_position_status_reports(self, command: GeneratePositionStatusReports) -> list[PositionStatusReport]:
         reports = []
         try:
+            instrument_id = command.instrument_id
             symbols = set()
             if instrument_id:
                 symbols.add(instrument_id.symbol.value.split("/")[0])
