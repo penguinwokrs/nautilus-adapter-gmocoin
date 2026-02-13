@@ -12,6 +12,11 @@ dependencies = [
     "nautilus-trader>=1.222.0",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that make real HTTP requests to GMO Coin API",
+]
+
 [tool.maturin]
 python-source = "."
 module-name = "nautilus_gmocoin._nautilus_gmocoin"

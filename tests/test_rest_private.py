@@ -9,7 +9,7 @@ so we must create the client and call the method inside the async function.
 import asyncio
 import json
 import pytest
-from tests.conftest import requires_rust_extension, requires_api_keys, load_api_keys
+from tests.conftest import requires_rust_extension, requires_api_keys, integration, load_api_keys
 
 
 def _make_rest_client():
@@ -28,6 +28,7 @@ def _run_test(api_call):
 
 @requires_rust_extension
 @requires_api_keys
+@integration
 class TestPrivateRestApi:
     """Tests that call the real GMO Coin private API."""
 

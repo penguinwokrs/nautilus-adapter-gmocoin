@@ -33,8 +33,9 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest nautilus-trader
 
-      - name: Run tests
+      - name: Run tests (unit only, skip integration)
         run: |
           cp -r tests ${{ runner.temp }}/tests
+          cp pyproject.toml ${{ runner.temp }}/
           cd ${{ runner.temp }}
-          python -m pytest tests/ -v --tb=short
+          python -m pytest tests/ -v --tb=short -m "not integration"

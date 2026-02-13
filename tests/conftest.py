@@ -52,3 +52,5 @@ requires_rust_extension = pytest.mark.skipif(
     not _check_rust_extension(),
     reason="Rust extension not built (run: maturin develop)"
 )
+
+integration = pytest.mark.integration

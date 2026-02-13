@@ -8,7 +8,7 @@ so we must create the client and call the method inside the async function.
 """
 import asyncio
 import json
-from tests.conftest import requires_rust_extension
+from tests.conftest import requires_rust_extension, integration
 
 
 def _make_rest_client():
@@ -16,24 +16,27 @@ def _make_rest_client():
     return gmocoin.GmocoinRestClient("", "", 10000, None, None)
 
 
+def _run_test(api_call):
+    """Run a pyo3-async API call inside a fresh event loop."""
+    async def _inner():
+        client = _make_rest_client()
+        return await api_call(client)
+    return asyncio.run(_inner())
+
+
 @requires_rust_extension
+@integration
 class TestPublicRestApi:
     """Tests that call the real GMO Coin public API."""
 
     def test_get_status(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_status_py()
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_status_py())
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "status" in data
 
     def test_get_ticker(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_ticker_py("BTC")
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_ticker_py("BTC"))
         data = json.loads(result)
         assert isinstance(data, list)
         if len(data) > 0:
@@ -43,10 +46,7 @@ class TestPublicRestApi:
             assert "symbol" in ticker
 
     def test_get_orderbooks(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_orderbooks_py("BTC")
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_orderbooks_py("BTC"))
         data = json.loads(result)
         assert "asks" in data
         assert "bids" in data
@@ -54,10 +54,7 @@ class TestPublicRestApi:
         assert isinstance(data["bids"], list)
 
     def test_get_symbols(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_symbols_py()
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_symbols_py())
         data = json.loads(result)
         assert isinstance(data, list)
         assert len(data) > 0
@@ -69,10 +66,7 @@ class TestPublicRestApi:
         assert "tickSize" in btc
 
     def test_get_trades(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_trades_py("BTC", None, None)
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_trades_py("BTC", None, None))
         data = json.loads(result)
         assert isinstance(data, (list, dict))
 
@@ -80,10 +74,7 @@ class TestPublicRestApi:
         from datetime import datetime, timezone
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
 
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_klines_py("BTC", "1hour", date_str)
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_klines_py("BTC", "1hour", date_str))
         data = json.loads(result)
         assert isinstance(data, list)
         if len(data) > 0:
