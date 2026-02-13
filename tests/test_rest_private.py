@@ -1,15 +1,16 @@
 """Integration tests for GMO Coin private REST API (requires API keys).
 
-These tests make real HTTP requests to the GMO Coin API.
-Run with: GMOCOIN_API_KEY=... GMOCOIN_API_SECRET=... pytest tests/test_rest_private.py -v
+These tests make real HTTP requests to the GMO Coin API when recording.
+In replay mode (default), responses are loaded from cassette files.
 
-Note: pyo3-asyncio methods need a running event loop at call time,
-so we must create the client and call the method inside the async function.
+Record cassettes:
+    GMOCOIN_API_KEY=... GMOCOIN_API_SECRET=... pytest tests/test_rest_private.py --record-cassettes -v
+Replay (default):
+    pytest tests/test_rest_private.py -v
 """
 import asyncio
 import json
-import pytest
-from tests.conftest import requires_rust_extension, requires_api_keys, integration, load_api_keys
+from tests.conftest import requires_rust_extension, integration, load_api_keys
 
 
 def _make_rest_client():
@@ -18,47 +19,48 @@ def _make_rest_client():
     return gmocoin.GmocoinRestClient(api_key, api_secret, 10000, None, None)
 
 
-def _run_test(api_call):
-    """Run a pyo3-async API call inside a fresh event loop."""
-    async def _inner():
-        client = _make_rest_client()
-        return await api_call(client)
-    return asyncio.run(_inner())
+def _live(api_call):
+    """Wrap an API call for vcr recording: creates client and runs in event loop."""
+    def _run():
+        async def _inner():
+            client = _make_rest_client()
+            return await api_call(client)
+        return asyncio.run(_inner())
+    return _run
 
 
 @requires_rust_extension
-@requires_api_keys
 @integration
 class TestPrivateRestApi:
     """Tests that call the real GMO Coin private API."""
 
-    def test_get_assets(self):
-        result = _run_test(lambda c: c.get_assets_py())
+    def test_get_assets(self, vcr):
+        result = vcr(_live(lambda c: c.get_assets_py()))
         data = json.loads(result)
         assert isinstance(data, list)
         symbols = [a.get("symbol", "") for a in data]
         assert "JPY" in symbols
 
-    def test_get_margin(self):
-        result = _run_test(lambda c: c.get_margin_py())
+    def test_get_margin(self, vcr):
+        result = vcr(_live(lambda c: c.get_margin_py()))
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "availableAmount" in data or "available_amount" in data
 
-    def test_get_active_orders(self):
-        result = _run_test(lambda c: c.get_active_orders_py("BTC", None, None))
+    def test_get_active_orders(self, vcr):
+        result = vcr(_live(lambda c: c.get_active_orders_py("BTC", None, None)))
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "list" in data
 
-    def test_get_position_summary(self):
-        result = _run_test(lambda c: c.get_position_summary_py(None))
+    def test_get_position_summary(self, vcr):
+        result = vcr(_live(lambda c: c.get_position_summary_py(None)))
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "list" in data
 
-    def test_ws_auth(self):
-        result = _run_test(lambda c: c.post_ws_auth_py())
+    def test_ws_auth(self, vcr):
+        result = vcr(_live(lambda c: c.post_ws_auth_py()))
         data = json.loads(result)
         assert isinstance(data, str)
         assert len(data) > 0
