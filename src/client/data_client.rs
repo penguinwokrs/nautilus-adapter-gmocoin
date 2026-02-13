@@ -32,7 +32,7 @@ impl GmocoinDataClient {
     ///   Default 0.5 (1 command per 2 seconds) for safety.
     #[new]
     pub fn new(ws_rate_limit_per_sec: Option<f64>) -> Self {
-        let ws_rate = ws_rate_limit_per_sec.unwrap_or(0.5);
+        let ws_rate = ws_rate_limit_per_sec.unwrap_or(1.0);
         Self {
             data_callback: Arc::new(std::sync::Mutex::new(None)),
             subscriptions: Arc::new(std::sync::Mutex::new(HashSet::new())),
@@ -194,7 +194,10 @@ impl GmocoinDataClient {
                         }
                     }
 
-                    // Main message loop
+                    // Main message loop with periodic outgoing queue drain
+                    let mut outgoing_check = tokio::time::interval(Duration::from_millis(500));
+                    outgoing_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
                     loop {
                         if shutdown.load(Ordering::SeqCst) {
                             let _ = ws.send(Message::Close(None)).await;
@@ -202,60 +205,62 @@ impl GmocoinDataClient {
                             return;
                         }
 
-                        match ws.next().await {
-                            Some(Ok(Message::Text(txt))) => {
-                                // Check for queued outgoing messages between each received message
-                                {
-                                    let mut queue = outgoing_arc.lock().unwrap();
-                                    for msg in queue.drain(..) {
-                                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
-                                            error!("GMO: Failed to send msg: {}", e);
+                        tokio::select! {
+                            msg = ws.next() => {
+                                match msg {
+                                    Some(Ok(Message::Text(txt))) => {
+                                        let txt_str: &str = txt.as_ref();
+                                        if let Ok(val) = serde_json::from_str::<Value>(txt_str) {
+                                            // Check for error responses (ERR-5003 rate limit, etc.)
+                                            if val.get("error").is_some() {
+                                                warn!("GMO: WS error response: {}", txt_str);
+                                                continue;
+                                            }
+
+                                            let channel = val.get("channel")
+                                                .and_then(|c| c.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            if !channel.is_empty() {
+                                                Self::dispatch_message(&channel, val, &data_cb_arc, &books_arc);
+                                            }
                                         }
                                     }
+                                    Some(Ok(Message::Ping(data))) => {
+                                        let _ = ws.send(Message::Pong(data)).await;
+                                    }
+                                    Some(Ok(Message::Close(_))) => {
+                                        warn!("GMO: Public WS closed by server");
+                                        break;
+                                    }
+                                    Some(Err(e)) => {
+                                        error!("GMO: Public WS error: {}", e);
+                                        break;
+                                    }
+                                    None => {
+                                        warn!("GMO: Public WS stream ended");
+                                        break;
+                                    }
+                                    _ => {}
                                 }
+                            }
+                            _ = outgoing_check.tick() => {
+                                // Periodically drain outgoing queue (handles late subscriptions)
+                            }
+                        }
 
-                                let txt_str: &str = txt.as_ref();
-                                if let Ok(val) = serde_json::from_str::<Value>(txt_str) {
-                                    // Check for error responses (ERR-5003 rate limit, etc.)
-                                    if val.get("error").is_some() {
-                                        warn!("GMO: WS error response: {}", txt_str);
-                                        continue;
-                                    }
-
-                                    let channel = val.get("channel")
-                                        .and_then(|c| c.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    if !channel.is_empty() {
-                                        Self::dispatch_message(&channel, val, &data_cb_arc, &books_arc);
-                                    }
+                        // Drain outgoing queue after either branch
+                        {
+                            let msgs: Vec<String> = {
+                                let mut queue = outgoing_arc.lock().unwrap();
+                                queue.drain(..).collect()
+                            };
+                            for msg in msgs {
+                                ws_rate_limit.acquire().await;
+                                if let Err(e) = ws.send(Message::Text(msg.into())).await {
+                                    error!("GMO: Failed to send msg: {}", e);
                                 }
                             }
-                            Some(Ok(Message::Ping(data))) => {
-                                // Process queued outgoing on ping too
-                                {
-                                    let mut queue = outgoing_arc.lock().unwrap();
-                                    for msg in queue.drain(..) {
-                                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
-                                            error!("GMO: Failed to send msg: {}", e);
-                                        }
-                                    }
-                                }
-                                let _ = ws.send(Message::Pong(data)).await;
-                            }
-                            Some(Ok(Message::Close(_))) => {
-                                warn!("GMO: Public WS closed by server");
-                                break;
-                            }
-                            Some(Err(e)) => {
-                                error!("GMO: Public WS error: {}", e);
-                                break;
-                            }
-                            None => {
-                                warn!("GMO: Public WS stream ended");
-                                break;
-                            }
-                            _ => {}
                         }
                     }
 
