@@ -4,7 +4,7 @@ These tests make real HTTP requests to the GMO Coin API.
 Run with: GMOCOIN_API_KEY=... GMOCOIN_API_SECRET=... pytest tests/test_rest_private.py -v
 
 Note: pyo3-asyncio methods need a running event loop at call time,
-so we must call the method inside the async function.
+so we must create the client and call the method inside the async function.
 """
 import asyncio
 import json
@@ -18,53 +18,46 @@ def _make_rest_client():
     return gmocoin.GmocoinRestClient(api_key, api_secret, 10000, None, None)
 
 
+def _run_test(api_call):
+    """Run a pyo3-async API call inside a fresh event loop."""
+    async def _inner():
+        client = _make_rest_client()
+        return await api_call(client)
+    return asyncio.run(_inner())
+
+
 @requires_rust_extension
 @requires_api_keys
 class TestPrivateRestApi:
     """Tests that call the real GMO Coin private API."""
 
     def test_get_assets(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_assets_py()
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_assets_py())
         data = json.loads(result)
         assert isinstance(data, list)
         symbols = [a.get("symbol", "") for a in data]
         assert "JPY" in symbols
 
     def test_get_margin(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_margin_py()
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_margin_py())
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "availableAmount" in data or "available_amount" in data
 
     def test_get_active_orders(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_active_orders_py("BTC", None, None)
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_active_orders_py("BTC", None, None))
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "list" in data
 
     def test_get_position_summary(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.get_position_summary_py(None)
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.get_position_summary_py(None))
         data = json.loads(result)
         assert isinstance(data, dict)
         assert "list" in data
 
     def test_ws_auth(self):
-        async def _test():
-            client = _make_rest_client()
-            return await client.post_ws_auth_py()
-        result = asyncio.run(_test())
+        result = _run_test(lambda c: c.post_ws_auth_py())
         data = json.loads(result)
         assert isinstance(data, str)
         assert len(data) > 0
