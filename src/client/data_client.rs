@@ -156,10 +156,14 @@ impl GmocoinDataClient {
             let ws_url = "wss://api.coin.z.com/ws/public/v1";
 
             match connect_async(ws_url).await {
-                Ok((mut ws, _)) => {
+                Ok((ws, _)) => {
                     info!("GMO: Connected to Public WebSocket");
                     backoff_sec = 1;
                     connected.store(true, Ordering::SeqCst);
+
+                    // Split WebSocket into independent read/write halves
+                    // to avoid mutable borrow conflicts in tokio::select!
+                    let (mut ws_write, mut ws_read) = ws.split();
 
                     // Collect all messages to send
                     let mut to_send: Vec<String> = Vec::new();
@@ -189,7 +193,7 @@ impl GmocoinDataClient {
                     // Send each subscription with rate limiting to avoid GMO Coin ERR-5003
                     for msg in to_send {
                         ws_rate_limit.acquire().await;
-                        if let Err(e) = ws.send(Message::Text(msg.into())).await {
+                        if let Err(e) = ws_write.send(Message::Text(msg.into())).await {
                             error!("GMO: Failed to send subscribe: {}", e);
                         }
                     }
@@ -200,7 +204,7 @@ impl GmocoinDataClient {
 
                     loop {
                         if shutdown.load(Ordering::SeqCst) {
-                            let _ = ws.send(Message::Close(None)).await;
+                            let _ = ws_write.send(Message::Close(None)).await;
                             connected.store(false, Ordering::SeqCst);
                             return;
                         }
@@ -210,7 +214,7 @@ impl GmocoinDataClient {
                         tokio::select! {
                             biased;
 
-                            msg = ws.next() => {
+                            msg = ws_read.next() => {
                                 match msg {
                                     Some(Ok(Message::Text(txt))) => {
                                         let txt_str: &str = txt.as_ref();
@@ -231,7 +235,7 @@ impl GmocoinDataClient {
                                         }
                                     }
                                     Some(Ok(Message::Ping(data))) => {
-                                        let _ = ws.send(Message::Pong(data)).await;
+                                        let _ = ws_write.send(Message::Pong(data)).await;
                                     }
                                     Some(Ok(Message::Close(_))) => {
                                         warn!("GMO: Public WS closed by server");
@@ -256,7 +260,7 @@ impl GmocoinDataClient {
                             _ = async {
                                 ws_rate_limit.acquire().await;
                                 if let Some(msg) = outgoing_arc.lock().unwrap().pop() {
-                                    if let Err(e) = ws.send(Message::Text(msg.into())).await {
+                                    if let Err(e) = ws_write.send(Message::Text(msg.into())).await {
                                         error!("GMO: Failed to send msg: {}", e);
                                     }
                                 }
