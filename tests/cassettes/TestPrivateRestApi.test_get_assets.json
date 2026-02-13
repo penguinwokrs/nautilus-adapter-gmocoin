@@ -1,0 +1,152 @@
+[
+  {
+    "amount": "10000",
+    "available": "10000",
+    "conversionRate": "1",
+    "symbol": "JPY"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "9968465",
+    "symbol": "BTC"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "291135",
+    "symbol": "ETH"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "76765",
+    "symbol": "BCH"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "7904",
+    "symbol": "LTC"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "203.605",
+    "symbol": "XRP"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "23.083",
+    "symbol": "XLM"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "8.83187",
+    "symbol": "OMG"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "58.068",
+    "symbol": "XTZ"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "188",
+    "symbol": "DOT"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "293",
+    "symbol": "ATOM"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "152.693",
+    "symbol": "DAI"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "0.173",
+    "symbol": "FCR"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "38.754",
+    "symbol": "ADA"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "1239",
+    "symbol": "LINK"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "13.744",
+    "symbol": "DOGE"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "11701",
+    "symbol": "SOL"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "1.42444",
+    "symbol": "FLR"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "1.185",
+    "symbol": "ASTR"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "130.7",
+    "symbol": "FIL"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "12.064",
+    "symbol": "SAND"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "5.871",
+    "symbol": "CHZ"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "1040.4",
+    "symbol": "NAC"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "1305",
+    "symbol": "AVAX"
+  },
+  {
+    "amount": "0",
+    "available": "0",
+    "conversionRate": "135.353",
+    "symbol": "SUI"
+  }
+]
