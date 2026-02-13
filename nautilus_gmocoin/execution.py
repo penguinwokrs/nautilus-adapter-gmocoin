@@ -16,7 +16,10 @@ from nautilus_trader.model.enums import (
     OrderSide, OrderType, OmsType, AccountType, OrderStatus,
     TimeInForce, LiquiditySide,
 )
-from nautilus_trader.execution.messages import SubmitOrder, CancelOrder, ModifyOrder
+from nautilus_trader.execution.messages import (
+    SubmitOrder, CancelOrder, ModifyOrder,
+    GenerateOrderStatusReports, GenerateFillReports, GeneratePositionStatusReports,
+)
 from nautilus_trader.execution.reports import OrderStatusReport, FillReport, PositionStatusReport
 from nautilus_trader.model.identifiers import TradeId, PositionId
 from nautilus_trader.model.objects import Price, Quantity
@@ -430,9 +433,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
     # Required abstract methods
 
-    async def generate_order_status_reports(self, instrument_id=None, client_order_id=None):
+    async def generate_order_status_reports(self, command: GenerateOrderStatusReports) -> list[OrderStatusReport]:
         reports = []
         try:
+            instrument_id = command.instrument_id
             # Determine which symbols to query
             symbols = set()
             if instrument_id:
@@ -597,9 +601,23 @@ class GmocoinExecutionClient(LiveExecutionClient):
             self._logger.error(f"Failed to generate account status reports: {e}", exc_info=True)
             return []
 
-    async def generate_fill_reports(self, instrument_id=None, client_order_id=None):
+    async def generate_fill_reports(self, command: GenerateFillReports) -> list[FillReport]:
         reports = []
         try:
+            instrument_id = command.instrument_id
+            venue_order_id = command.venue_order_id
+
+            # When venue_order_id is specified, fetch only that order's executions
+            if venue_order_id:
+                try:
+                    resp_json = await self._rust_client.get_executions(str(venue_order_id))
+                    resp = json.loads(resp_json)
+                    exec_list = resp if isinstance(resp, list) else resp.get("list", [])
+                    self._parse_fill_reports(exec_list, instrument_id, reports)
+                except Exception as e:
+                    self._logger.warning(f"Failed to fetch executions for order {venue_order_id}: {e}")
+                return reports
+
             symbols = set()
             if instrument_id:
                 symbols.add(instrument_id.symbol.value.split("/")[0])
@@ -615,46 +633,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     resp_json = await self._rust_client.get_latest_executions(symbol)
                     resp = json.loads(resp_json)
                     exec_list = resp if isinstance(resp, list) else resp.get("list", [])
-
-                    for exec_data in exec_list:
-                        try:
-                            venue_oid = VenueOrderId(str(exec_data.get("orderId")))
-                            trade_id = TradeId(str(exec_data.get("executionId")))
-                            side_str = exec_data.get("side", "BUY")
-                            order_side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
-
-                            exec_size = Decimal(exec_data.get("size", "0"))
-                            exec_price = Decimal(exec_data.get("price", "0"))
-                            fee = Decimal(exec_data.get("fee", "0"))
-
-                            from nautilus_trader.model.identifiers import InstrumentId, Symbol
-                            inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
-
-                            instrument = self._instrument_provider.find(inst_id)
-                            quote_currency = JPY
-                            if instrument:
-                                quote_currency = instrument.quote_currency
-
-                            ts_now = self._clock.timestamp_ns()
-
-                            report = FillReport(
-                                account_id=self._account_id,
-                                instrument_id=inst_id,
-                                venue_order_id=venue_oid,
-                                trade_id=trade_id,
-                                order_side=order_side,
-                                last_qty=Quantity(exec_size, precision=8),
-                                last_px=Price(exec_price, precision=0),
-                                commission=Money(fee, quote_currency),
-                                liquidity_side=LiquiditySide.NO_LIQUIDITY_SIDE,
-                                report_id=UUID4(),
-                                ts_event=ts_now,
-                                ts_init=ts_now,
-                            )
-                            reports.append(report)
-                        except Exception as e:
-                            self._logger.warning(f"Failed to parse fill report: {e}")
-                            continue
+                    self._parse_fill_reports(exec_list, instrument_id, reports)
                 except Exception as e:
                     self._logger.warning(f"Failed to fetch executions for {symbol}: {e}")
                     continue
@@ -664,9 +643,52 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         return reports
 
-    async def generate_position_status_reports(self, instrument_id=None):
+    def _parse_fill_reports(self, exec_list: list, instrument_id, reports: list):
+        from nautilus_trader.model.identifiers import InstrumentId, Symbol
+        for exec_data in exec_list:
+            try:
+                venue_oid = VenueOrderId(str(exec_data.get("orderId")))
+                trade_id = TradeId(str(exec_data.get("executionId")))
+                side_str = exec_data.get("side", "BUY")
+                order_side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
+
+                exec_size = Decimal(exec_data.get("size", "0"))
+                exec_price = Decimal(exec_data.get("price", "0"))
+                fee = Decimal(exec_data.get("fee", "0"))
+
+                symbol = exec_data.get("symbol", "BTC")
+                inst_id = instrument_id or InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+
+                instrument = self._instrument_provider.find(inst_id)
+                quote_currency = JPY
+                if instrument:
+                    quote_currency = instrument.quote_currency
+
+                ts_now = self._clock.timestamp_ns()
+
+                report = FillReport(
+                    account_id=self._account_id,
+                    instrument_id=inst_id,
+                    venue_order_id=venue_oid,
+                    trade_id=trade_id,
+                    order_side=order_side,
+                    last_qty=Quantity(exec_size, precision=8),
+                    last_px=Price(exec_price, precision=0),
+                    commission=Money(fee, quote_currency),
+                    liquidity_side=LiquiditySide.NO_LIQUIDITY_SIDE,
+                    report_id=UUID4(),
+                    ts_event=ts_now,
+                    ts_init=ts_now,
+                )
+                reports.append(report)
+            except Exception as e:
+                self._logger.warning(f"Failed to parse fill report: {e}")
+                continue
+
+    async def generate_position_status_reports(self, command: GeneratePositionStatusReports) -> list[PositionStatusReport]:
         reports = []
         try:
+            instrument_id = command.instrument_id
             symbols = set()
             if instrument_id:
                 symbols.add(instrument_id.symbol.value.split("/")[0])
