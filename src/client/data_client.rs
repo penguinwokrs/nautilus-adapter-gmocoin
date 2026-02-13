@@ -194,7 +194,7 @@ impl GmocoinDataClient {
                         }
                     }
 
-                    // Main message loop with periodic outgoing queue drain
+                    // Main message loop with non-blocking outgoing queue drain
                     let mut outgoing_check = tokio::time::interval(Duration::from_millis(500));
                     outgoing_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -205,7 +205,11 @@ impl GmocoinDataClient {
                             return;
                         }
 
+                        let has_outgoing = !outgoing_arc.lock().unwrap().is_empty();
+
                         tokio::select! {
+                            biased;
+
                             msg = ws.next() => {
                                 match msg {
                                     Some(Ok(Message::Text(txt))) => {
@@ -243,24 +247,20 @@ impl GmocoinDataClient {
                                     }
                                     _ => {}
                                 }
-                            }
-                            _ = outgoing_check.tick() => {
-                                // Periodically drain outgoing queue (handles late subscriptions)
-                            }
-                        }
+                            },
 
-                        // Drain outgoing queue after either branch
-                        {
-                            let msgs: Vec<String> = {
-                                let mut queue = outgoing_arc.lock().unwrap();
-                                queue.drain(..).collect()
-                            };
-                            for msg in msgs {
+                            _ = outgoing_check.tick(), if !has_outgoing => {
+                                // Keep loop alive to check for newly added subscriptions
+                            },
+
+                            _ = async {
                                 ws_rate_limit.acquire().await;
-                                if let Err(e) = ws.send(Message::Text(msg.into())).await {
-                                    error!("GMO: Failed to send msg: {}", e);
+                                if let Some(msg) = outgoing_arc.lock().unwrap().pop() {
+                                    if let Err(e) = ws.send(Message::Text(msg.into())).await {
+                                        error!("GMO: Failed to send msg: {}", e);
+                                    }
                                 }
-                            }
+                            }, if has_outgoing => {}
                         }
                     }
 

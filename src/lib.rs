@@ -19,7 +19,7 @@ fn _nautilus_gmocoin(m: &Bound<'_, PyModule>) -> PyResult<()> {
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
             )
-            .init();
+            .try_init().ok();
     });
 
     m.add_class::<client::rest::GmocoinRestClient>()?;
