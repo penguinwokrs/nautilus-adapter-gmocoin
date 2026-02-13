@@ -209,6 +209,7 @@ impl GmocoinRestClient {
         pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
+    #[pyo3(signature = (order_id, price, losscut_price=None))]
     pub fn post_change_order_py<'py>(
         &self,
         py: Python<'py>,
@@ -291,9 +292,9 @@ impl GmocoinRestClient {
     pub fn put_ws_auth_py<'py>(&self, py: Python<'py>, token: String) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let future = async move {
-            let body = serde_json::json!({"token": token}).to_string();
-            let res: serde_json::Value = client.private_put("/v1/ws-auth", &body).await.map_err(PyErr::from)?;
-            serde_json::to_string(&res).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+            client.put_ws_auth(&token).await.map_err(PyErr::from)?;
+            // PUT returns no data; return the same token for convenience
+            serde_json::to_string(&token).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
         };
         pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
@@ -532,8 +533,12 @@ impl GmocoinRestClient {
         let timestamp = Self::timestamp_ms();
         let method_str = method.as_str();
 
-        // GMO Coin signature: timestamp + method + path + body
-        let text_to_sign = format!("{}{}{}{}", timestamp, method_str, endpoint, body);
+        // GMO Coin signature: POST includes body, PUT/DELETE do not
+        let text_to_sign = if method == Method::POST {
+            format!("{}{}{}{}", timestamp, method_str, endpoint, body)
+        } else {
+            format!("{}{}{}", timestamp, method_str, endpoint)
+        };
         let signature = self.generate_signature(&text_to_sign);
 
         let url = format!("{}{}", self.base_url_private, endpoint);
@@ -567,10 +572,15 @@ impl GmocoinRestClient {
                     ))),
                 }
             } else {
-                Err(GmocoinError::Unknown(format!(
-                    "status=0 but no data. Body: {}",
-                    text
-                )))
+                // Some endpoints (cancelOrder, changeOrder, etc.) return status=0
+                // with no data field. Try to deserialize null as T.
+                match serde_json::from_value::<T>(serde_json::Value::Null) {
+                    Ok(res) => Ok(res),
+                    Err(_) => Err(GmocoinError::Unknown(format!(
+                        "status=0 but no data. Body: {}",
+                        text
+                    ))),
+                }
             }
         } else {
             // Extract error messages
