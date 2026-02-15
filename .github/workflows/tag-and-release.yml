@@ -9,12 +9,15 @@ on:
       - main
 
 jobs:
-  tag-and-release:
+  tag:
     runs-on: ubuntu-latest
     # CIが成功したときのみ実行
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
-      contents: write  # タグのpushに必要
+      contents: write
+    outputs:
+      create_tag: ${{ steps.tag_check.outputs.create_tag }}
+      tag_name: ${{ steps.tag_check.outputs.tag_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +32,7 @@ jobs:
           # Get version from pyproject.toml
           VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
           TAG="v$VERSION"
-          
+
           echo "Detected version: $VERSION"
           echo "Target tag: $TAG"
 
@@ -51,5 +54,126 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.create_tag == 'true'
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            manylinux: "2_28"
+          - target: aarch64
+            manylinux: "2_28"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up QEMU (aarch64)
+        if: matrix.target == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist -i python3.12
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist/
+
+  sdist:
+    needs: tag
+    if: needs.tag.outputs.create_tag == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-22.04
+    needs: [tag, build, sdist]
+    if: needs.tag.outputs.create_tag == 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect wheels and sdist
+        run: |
+          mkdir -p release-packages
+          find artifacts -name "*.whl" -exec cp {} release-packages/ \;
+          find artifacts -name "*.tar.gz" -exec cp {} release-packages/ \;
+          ls -la release-packages/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.tag_name }}
+          body: |
+            ## NautilusTrader GMO Coin Adapter
+
+            main ブランチへのマージにより自動ビルドされた成果物です。
+
+            ### インストール方法
+
+            1. この Release の Assets からお使いの環境用の wheel をダウンロード
+            2. 以下でインストール:
+            ```bash
+            pip install nautilus_adapter_gmocoin-*.whl
+            ```
+            または sdist からビルド:
+            ```bash
+            pip install nautilus_adapter_gmocoin-*.tar.gz
+            ```
+
+            ### プラットフォーム
+
+            - Linux x86_64, aarch64 (manylinux)
+
+            ### Python バージョン
+
+            Python 3.12 以上
+          draft: false
+          prerelease: false
+          files: release-packages/*
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
