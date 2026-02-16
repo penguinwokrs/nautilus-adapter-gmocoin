@@ -210,6 +210,7 @@ impl GmocoinExecutionClient {
         pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
+    #[pyo3(signature = (symbol, page=None, count=None))]
     pub fn get_active_orders<'py>(
         &self,
         py: Python<'py>,
@@ -229,6 +230,7 @@ impl GmocoinExecutionClient {
         pyo3_async_runtimes::tokio::future_into_py(py, future)
     }
 
+    #[pyo3(signature = (symbol, page=None, count=None))]
     pub fn get_latest_executions<'py>(
         &self,
         py: Python<'py>,
@@ -258,6 +260,7 @@ impl GmocoinExecutionClient {
         self.rest_client.get_margin_py(py)
     }
 
+    #[pyo3(signature = (symbol, page=None, count=None))]
     pub fn get_open_positions<'py>(&self, py: Python<'py>, symbol: String, page: Option<i32>, count: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         self.rest_client.get_open_positions_py(py, symbol, page, count)
     }
