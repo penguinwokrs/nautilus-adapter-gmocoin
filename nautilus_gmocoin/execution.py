@@ -11,7 +11,7 @@ from nautilus_trader.model.objects import Money, Currency, AccountBalance
 from nautilus_trader.model.events import AccountState
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.currencies import JPY
-from nautilus_trader.model.identifiers import Venue, ClientId, AccountId, ClientOrderId, InstrumentId, VenueOrderId
+from nautilus_trader.model.identifiers import Venue, ClientId, AccountId, ClientOrderId, InstrumentId, Symbol, VenueOrderId
 from nautilus_trader.model.enums import (
     OrderSide, OrderType, OmsType, AccountType, OrderStatus,
     TimeInForce, LiquiditySide,
@@ -461,7 +461,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
         instrument_id: InstrumentId | None = None,
         client_order_id: ClientOrderId | None = None,
     ) -> OrderStatusReport:
-        from nautilus_trader.model.identifiers import InstrumentId, Symbol
+        if client_order_id is None:
+            coid_str = order_data.get("clientOrderId")
+            if coid_str:
+                client_order_id = ClientOrderId(coid_str)
 
         venue_oid = VenueOrderId(str(order_data.get("orderId")))
         side_str = order_data.get("side", "BUY")
@@ -484,7 +487,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         if instrument_id is None:
             symbol = order_data.get("symbol", "BTC")
-            instrument_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+            instrument_id = InstrumentId(Symbol(f"{symbol}/JPY"), self.venue)
 
         ts_now = self._clock.timestamp_ns()
 
@@ -556,8 +559,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     resp = json.loads(resp_json)
                     orders_list = resp if isinstance(resp, list) else resp.get("list", [])
 
-                    from nautilus_trader.model.identifiers import InstrumentId, Symbol
-                    inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+                    inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), self.venue)
 
                     for order_data in orders_list:
                         try:
