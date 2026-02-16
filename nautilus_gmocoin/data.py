@@ -122,10 +122,11 @@ class GmocoinDataClient(LiveMarketDataClient):
         ask = data.ask
 
         if bid and ask:
+            precision = instrument.price_precision
             quote = QuoteTick(
                 instrument_id=instrument.id,
-                bid_price=Price.from_str(str(bid)),
-                ask_price=Price.from_str(str(ask)),
+                bid_price=Price(float(bid), precision),
+                ask_price=Price(float(ask), precision),
                 bid_size=Quantity.from_str("0"),
                 ask_size=Quantity.from_str("0"),
                 ts_event=self._clock.timestamp_ns(),
