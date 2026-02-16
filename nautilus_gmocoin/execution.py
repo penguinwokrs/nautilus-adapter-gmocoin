@@ -11,14 +11,15 @@ from nautilus_trader.model.objects import Money, Currency, AccountBalance
 from nautilus_trader.model.events import AccountState
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.currencies import JPY
-from nautilus_trader.model.identifiers import Venue, ClientId, AccountId, VenueOrderId
+from nautilus_trader.model.identifiers import Venue, ClientId, AccountId, ClientOrderId, InstrumentId, VenueOrderId
 from nautilus_trader.model.enums import (
     OrderSide, OrderType, OmsType, AccountType, OrderStatus,
     TimeInForce, LiquiditySide,
 )
 from nautilus_trader.execution.messages import (
     SubmitOrder, CancelOrder, ModifyOrder,
-    GenerateOrderStatusReports, GenerateFillReports, GeneratePositionStatusReports,
+    GenerateOrderStatusReport, GenerateOrderStatusReports,
+    GenerateFillReports, GeneratePositionStatusReports,
 )
 from nautilus_trader.execution.reports import OrderStatusReport, FillReport, PositionStatusReport
 from nautilus_trader.model.identifiers import TradeId, PositionId
@@ -433,6 +434,107 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
     # Required abstract methods
 
+    GMO_ORDER_STATUS_MAP = {
+        "WAITING": OrderStatus.ACCEPTED,
+        "ORDERED": OrderStatus.ACCEPTED,
+        "MODIFYING": OrderStatus.ACCEPTED,
+        "CANCELLING": OrderStatus.PENDING_CANCEL,
+        "CANCELED": OrderStatus.CANCELED,
+        "EXECUTED": OrderStatus.FILLED,
+        "EXPIRED": OrderStatus.EXPIRED,
+    }
+    GMO_ORDER_TYPE_MAP = {
+        "MARKET": OrderType.MARKET,
+        "LIMIT": OrderType.LIMIT,
+        "STOP": OrderType.STOP_MARKET,
+    }
+    GMO_TIF_MAP = {
+        "FAK": TimeInForce.IOC,
+        "FAS": TimeInForce.GTC,
+        "FOK": TimeInForce.FOK,
+        "SOK": TimeInForce.GTC,
+    }
+
+    def _parse_order_status_report(
+        self,
+        order_data: dict,
+        instrument_id: InstrumentId | None = None,
+        client_order_id: ClientOrderId | None = None,
+    ) -> OrderStatusReport:
+        from nautilus_trader.model.identifiers import InstrumentId, Symbol
+
+        venue_oid = VenueOrderId(str(order_data.get("orderId")))
+        side_str = order_data.get("side", "BUY")
+        order_side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
+
+        exec_type = order_data.get("executionType", "LIMIT")
+        order_type = self.GMO_ORDER_TYPE_MAP.get(exec_type, OrderType.LIMIT)
+
+        tif_str = order_data.get("timeInForce", "FAS")
+        time_in_force = self.GMO_TIF_MAP.get(tif_str, TimeInForce.GTC)
+
+        status_str = order_data.get("status", "ORDERED")
+        order_status = self.GMO_ORDER_STATUS_MAP.get(status_str, OrderStatus.ACCEPTED)
+
+        size = Decimal(order_data.get("size", "0"))
+        executed_size = Decimal(order_data.get("executedSize", "0"))
+
+        price_str = order_data.get("price")
+        price = Price(Decimal(price_str), precision=0) if price_str else None
+
+        if instrument_id is None:
+            symbol = order_data.get("symbol", "BTC")
+            instrument_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+
+        ts_now = self._clock.timestamp_ns()
+
+        return OrderStatusReport(
+            account_id=self._account_id,
+            instrument_id=instrument_id,
+            venue_order_id=venue_oid,
+            order_side=order_side,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            order_status=order_status,
+            quantity=Quantity(size, precision=8),
+            filled_qty=Quantity(executed_size, precision=8),
+            report_id=UUID4(),
+            ts_accepted=ts_now,
+            ts_last=ts_now,
+            ts_init=ts_now,
+            client_order_id=client_order_id,
+            price=price,
+        )
+
+    async def generate_order_status_report(
+        self,
+        command: GenerateOrderStatusReport,
+    ) -> OrderStatusReport | None:
+        try:
+            venue_order_id = command.venue_order_id
+            if venue_order_id is None and command.client_order_id is not None:
+                venue_order_id = self._cache.venue_order_id(command.client_order_id)
+            if venue_order_id is None:
+                self._logger.warning("generate_order_status_report: no venue_order_id available")
+                return None
+
+            resp_json = await self._rust_client.get_order(str(venue_order_id))
+            resp = json.loads(resp_json)
+            orders_list = resp if isinstance(resp, list) else resp.get("list", [])
+
+            if not orders_list:
+                self._logger.warning(f"generate_order_status_report: no order found for {venue_order_id}")
+                return None
+
+            return self._parse_order_status_report(
+                orders_list[0],
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+            )
+        except Exception as e:
+            self._logger.error(f"Failed to generate order status report: {e}")
+            return None
+
     async def generate_order_status_reports(self, command: GenerateOrderStatusReports) -> list[OrderStatusReport]:
         reports = []
         try:
@@ -448,76 +550,18 @@ class GmocoinExecutionClient(LiveExecutionClient):
             if not symbols:
                 symbols.add("BTC")
 
-            GMO_ORDER_STATUS_MAP = {
-                "WAITING": OrderStatus.ACCEPTED,
-                "ORDERED": OrderStatus.ACCEPTED,
-                "MODIFYING": OrderStatus.ACCEPTED,
-                "CANCELLING": OrderStatus.PENDING_CANCEL,
-                "CANCELED": OrderStatus.CANCELED,
-                "EXECUTED": OrderStatus.FILLED,
-                "EXPIRED": OrderStatus.EXPIRED,
-            }
-            GMO_ORDER_TYPE_MAP = {
-                "MARKET": OrderType.MARKET,
-                "LIMIT": OrderType.LIMIT,
-                "STOP": OrderType.STOP_MARKET,
-            }
-            GMO_TIF_MAP = {
-                "FAK": TimeInForce.IOC,
-                "FAS": TimeInForce.GTC,
-                "FOK": TimeInForce.FOK,
-                "SOK": TimeInForce.GTC,
-            }
-
             for symbol in symbols:
                 try:
                     resp_json = await self._rust_client.get_active_orders(symbol)
                     resp = json.loads(resp_json)
                     orders_list = resp if isinstance(resp, list) else resp.get("list", [])
 
+                    from nautilus_trader.model.identifiers import InstrumentId, Symbol
+                    inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
+
                     for order_data in orders_list:
                         try:
-                            venue_oid = VenueOrderId(str(order_data.get("orderId")))
-                            side_str = order_data.get("side", "BUY")
-                            order_side = OrderSide.BUY if side_str == "BUY" else OrderSide.SELL
-
-                            exec_type = order_data.get("executionType", "LIMIT")
-                            order_type = GMO_ORDER_TYPE_MAP.get(exec_type, OrderType.LIMIT)
-
-                            tif_str = order_data.get("timeInForce", "FAS")
-                            time_in_force = GMO_TIF_MAP.get(tif_str, TimeInForce.GTC)
-
-                            status_str = order_data.get("status", "ORDERED")
-                            order_status = GMO_ORDER_STATUS_MAP.get(status_str, OrderStatus.ACCEPTED)
-
-                            size = Decimal(order_data.get("size", "0"))
-                            executed_size = Decimal(order_data.get("executedSize", "0"))
-
-                            price_str = order_data.get("price")
-                            price = Price(Decimal(price_str), precision=0) if price_str else None
-
-                            # Build instrument_id from symbol
-                            from nautilus_trader.model.identifiers import InstrumentId, Symbol
-                            inst_id = InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
-
-                            ts_now = self._clock.timestamp_ns()
-
-                            report = OrderStatusReport(
-                                account_id=self._account_id,
-                                instrument_id=inst_id,
-                                venue_order_id=venue_oid,
-                                order_side=order_side,
-                                order_type=order_type,
-                                time_in_force=time_in_force,
-                                order_status=order_status,
-                                quantity=Quantity(size, precision=8),
-                                filled_qty=Quantity(executed_size, precision=8),
-                                report_id=UUID4(),
-                                ts_accepted=ts_now,
-                                ts_last=ts_now,
-                                ts_init=ts_now,
-                                price=price,
-                            )
+                            report = self._parse_order_status_report(order_data, instrument_id=inst_id)
                             reports.append(report)
                         except Exception as e:
                             self._logger.warning(f"Failed to parse order report: {e}")
