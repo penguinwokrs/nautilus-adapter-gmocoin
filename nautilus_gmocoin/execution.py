@@ -336,6 +336,13 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         return order
 
+    def _get_quote_currency(self, instrument_id: InstrumentId):
+        """Find instrument and return its quote currency, falling back to JPY."""
+        instrument = self._instrument_provider.find(instrument_id)
+        if instrument is None and hasattr(self, '_cache'):
+            instrument = self._cache.instrument(instrument_id)
+        return JPY if not instrument else instrument.quote_currency
+
     async def _process_execution_update(self, venue_order_id: VenueOrderId, data: dict):
         """Process executionEvents channel WS message with accurate fill data."""
         try:
@@ -373,11 +380,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 self.log.warning(f"ExecutionUpdate with zero size, executionId={execution_id}")
                 return
 
-            instrument = self._instrument_provider.find(order.instrument_id)
-            if instrument is None and hasattr(self, '_cache'):
-                instrument = self._cache.instrument(order.instrument_id)
-            quote_currency = JPY if not instrument else instrument.quote_currency
-
+            quote_currency = self._get_quote_currency(order.instrument_id)
             commission = Money(fee, quote_currency)
 
             self.generate_order_filled(
@@ -422,11 +425,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
         if not order:
             return
 
-        instrument = self._instrument_provider.find(order.instrument_id)
-        if instrument is None and hasattr(self, '_cache'):
-            instrument = self._cache.instrument(order.instrument_id)
-
-        quote_currency = JPY if not instrument else instrument.quote_currency
+        quote_currency = self._get_quote_currency(order.instrument_id)
 
         await self._process_order_update(order, venue_order_id, quote_currency, data)
 
