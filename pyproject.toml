@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "nautilus-adapter-gmocoin"
-version = "0.1.5"
+version = "0.1.6"
 description = "GMO Coin adapter for NautilusTrader"
 requires-python = ">=3.12"
 license = { text = "LGPL-3.0-or-later" }
