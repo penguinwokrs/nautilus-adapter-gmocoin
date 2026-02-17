@@ -41,6 +41,9 @@ class GmocoinExecutionClient(LiveExecutionClient):
     Wraps Rust GmocoinExecutionClient for REST orders and Private WebSocket.
     """
 
+    _CLIENT_OID_LOOKUP_RETRIES = 10
+    _CLIENT_OID_LOOKUP_DELAY_S = 0.1
+
     def __init__(self, loop, config: GmocoinExecClientConfig, msgbus, cache, clock, instrument_provider: InstrumentProvider):
         super().__init__(
             loop=loop,
@@ -251,9 +254,9 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 venue_order_id = VenueOrderId(str(data.get("orderId")))
                 self.create_task(self._process_order_update_from_data(venue_order_id, data))
             elif event_type == "ExecutionUpdate":
-                self.log.info(f"Received ExecutionUpdate via WS: order_id={data.get('orderId')}")
+                self.log.info(f"Received ExecutionUpdate via WS: order_id={data.get('orderId')}, executionId={data.get('executionId')}")
                 venue_order_id = VenueOrderId(str(data.get("orderId")))
-                self.create_task(self._process_order_update_from_data(venue_order_id, data))
+                self.create_task(self._process_execution_update(venue_order_id, data))
             elif event_type == "AssetUpdate":
                 self._process_asset_update(data)
             elif event_type == "PositionUpdate":
@@ -283,8 +286,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 self.log.debug(f"Skipping unknown currency: {asset_code}")
                 return
 
-            total_val = int(Decimal(data.get("amount", "0")))
-            available_val = int(Decimal(data.get("available", "0")))
+            total_val = Decimal(data.get("amount", "0"))
+            available_val = Decimal(data.get("available", "0"))
             locked_val = total_val - available_val
 
             balance = AccountBalance(
@@ -313,38 +316,123 @@ class GmocoinExecutionClient(LiveExecutionClient):
         except Exception as e:
             self.log.error(f"Failed to process asset update: {e}")
 
-    async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
-        # Retry loop for ClientOrderId lookup (race condition)
+    async def _lookup_order_with_retry(self, venue_order_id: VenueOrderId) -> Optional[Order]:
+        """Lookup order via cache with retries for race condition with order acceptance."""
         client_oid = None
-        for _ in range(10):
+        for _ in range(self._CLIENT_OID_LOOKUP_RETRIES):
             client_oid = self._cache.client_order_id(venue_order_id)
             if client_oid:
                 break
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self._CLIENT_OID_LOOKUP_DELAY_S)
 
         if not client_oid:
-            self._logger.warning(
-                f"ClientOrderId not found for venue_order_id: {venue_order_id} after retries."
-            )
-            return
+            self.log.warning(f"ClientOrderId not found for venue_order_id: {venue_order_id} after retries")
+            return None
 
         order = self._cache.order(client_oid)
         if not order:
-            self._logger.warning(f"Order not found in cache for client_order_id: {client_oid}")
+            self.log.warning(f"Order not found in cache for client_order_id: {client_oid}")
+            return None
+
+        return order
+
+    def _get_quote_currency(self, instrument_id: InstrumentId):
+        """Find instrument and return its quote currency, falling back to JPY."""
+        instrument = self._instrument_provider.find(instrument_id)
+        if instrument is None and hasattr(self, '_cache'):
+            instrument = self._cache.instrument(instrument_id)
+        return JPY if not instrument else instrument.quote_currency
+
+    async def _process_execution_update(self, venue_order_id: VenueOrderId, data: dict):
+        """Process executionEvents channel WS message with accurate fill data."""
+        try:
+            execution_id = str(data.get("executionId", ""))
+            if not execution_id:
+                self.log.warning("ExecutionUpdate missing executionId, skipping")
+                return
+
+            order = await self._lookup_order_with_retry(venue_order_id)
+            if not order:
+                return
+
+            # Initialize order state
+            oid_str = str(venue_order_id)
+            if oid_str not in self._order_states:
+                self._order_states[oid_str] = {
+                    "last_executed_qty": Decimal("0"),
+                    "reported_trades": set(),
+                }
+
+            state = self._order_states[oid_str]
+
+            # Dedup by executionId
+            if execution_id in state["reported_trades"]:
+                self.log.debug(f"ExecutionUpdate duplicate executionId={execution_id}, skipping")
+                return
+
+            # Extract fill data from WS executionEvents fields
+            # Use explicit None checks to avoid falsy 0 values being skipped
+            exec_price = Decimal(data.get("executionPrice") if data.get("executionPrice") is not None else data.get("price", "0"))
+            exec_size = Decimal(data.get("executionSize") if data.get("executionSize") is not None else data.get("size", "0"))
+            fee = Decimal(data.get("fee", "0"))
+
+            if exec_size <= 0:
+                self.log.warning(f"ExecutionUpdate with zero size, executionId={execution_id}")
+                return
+
+            quote_currency = self._get_quote_currency(order.instrument_id)
+            commission = Money(fee, quote_currency)
+
+            self.generate_order_filled(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                venue_position_id=None,
+                fill_id=TradeId(execution_id),
+                last_qty=exec_size,
+                last_px=exec_price,
+                liquidity=self._infer_liquidity_side(order),
+                commission=commission,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+            # Mark as reported AFTER successful fill generation to avoid
+            # permanently losing fills if generate_order_filled raises
+            state["reported_trades"].add(execution_id)
+            state["last_executed_qty"] += exec_size
+
+            self.log.info(
+                f"ExecutionUpdate fill: executionId={execution_id}, "
+                f"price={exec_price}, size={exec_size}, fee={fee}"
+            )
+
+        except Exception as e:
+            self.log.error(f"Failed to process ExecutionUpdate: {e}", exc_info=True)
+
+    def _infer_liquidity_side(self, order: Order) -> LiquiditySide:
+        """Infer liquidity side from order type."""
+        if order.order_type == OrderType.MARKET:
+            return LiquiditySide.TAKER
+        if hasattr(order, 'is_post_only') and order.is_post_only:
+            return LiquiditySide.MAKER
+        if order.order_type == OrderType.LIMIT:
+            return LiquiditySide.MAKER
+        return LiquiditySide.NO_LIQUIDITY_SIDE
+
+    async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
+        order = await self._lookup_order_with_retry(venue_order_id)
+        if not order:
             return
 
-        instrument = self._instrument_provider.find(order.instrument_id)
-        if instrument is None and hasattr(self, '_cache'):
-            instrument = self._cache.instrument(order.instrument_id)
-
-        quote_currency = JPY if not instrument else instrument.quote_currency
+        quote_currency = self._get_quote_currency(order.instrument_id)
 
         await self._process_order_update(order, venue_order_id, quote_currency, data)
 
     async def _process_order_update(self, order: Order, venue_order_id: VenueOrderId, quote_currency, data: dict) -> bool:
         try:
-            status = data.get("status")
-            executed_qty = Decimal(data.get("executedSize", "0"))
+            status = data.get("orderStatus") if data.get("orderStatus") is not None else data.get("status")
+            executed_qty = Decimal(data.get("orderExecutedSize") if data.get("orderExecutedSize") is not None else data.get("executedSize", "0"))
 
             # Track fill state
             oid_str = str(venue_order_id)
@@ -360,21 +448,20 @@ class GmocoinExecutionClient(LiveExecutionClient):
             # Handle fills
             if executed_qty > last_qty:
                 delta = executed_qty - last_qty
-                avg_price = Decimal(data.get("price", "0") or "0")
+                avg_price = Decimal(data.get("orderPrice") if data.get("orderPrice") is not None else data.get("price", "0"))
                 commission = Money(Decimal("0"), quote_currency)
 
                 # Try to get detailed execution info
+                new_execs = []
                 try:
                     history_json = await self._rust_client.get_executions(str(venue_order_id))
                     history = json.loads(history_json)
                     raw_executions = history.get("list", [])
 
-                    new_execs = []
                     for ex in raw_executions:
                         eid = str(ex.get("executionId"))
                         if eid not in state["reported_trades"]:
                             new_execs.append(ex)
-                            state["reported_trades"].add(eid)
 
                     if new_execs:
                         total_fee = Decimal("0")
@@ -405,10 +492,15 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     fill_id=None,
                     last_qty=delta,
                     last_px=avg_price,
-                    liquidity=None,
+                    liquidity=self._infer_liquidity_side(order),
                     commission=commission,
                     ts_event=self._clock.timestamp_ns(),
                 )
+
+                # Mark as reported AFTER successful fill generation to avoid
+                # permanently losing fills if generate_order_filled raises
+                for ex in new_execs:
+                    state["reported_trades"].add(str(ex.get("executionId")))
 
                 state["last_executed_qty"] = executed_qty
 
@@ -422,9 +514,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
                         venue_order_id=venue_order_id,
                         ts_event=self._clock.timestamp_ns(),
                     )
+                self._order_states.pop(oid_str, None)
                 return True
 
             if status == "EXECUTED":
+                self._order_states.pop(oid_str, None)
                 return True
 
         except Exception as e:
@@ -603,8 +697,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     if currency is None:
                         continue
 
-                    total = int(Decimal(asset.get("amount", "0")))
-                    available = int(Decimal(asset.get("available", "0")))
+                    total = Decimal(asset.get("amount", "0"))
+                    available = Decimal(asset.get("available", "0"))
                     locked = total - available
 
                     nautilus_balances.append(
