@@ -452,17 +452,16 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 commission = Money(Decimal("0"), quote_currency)
 
                 # Try to get detailed execution info
+                new_execs = []
                 try:
                     history_json = await self._rust_client.get_executions(str(venue_order_id))
                     history = json.loads(history_json)
                     raw_executions = history.get("list", [])
 
-                    new_execs = []
                     for ex in raw_executions:
                         eid = str(ex.get("executionId"))
                         if eid not in state["reported_trades"]:
                             new_execs.append(ex)
-                            state["reported_trades"].add(eid)
 
                     if new_execs:
                         total_fee = Decimal("0")
@@ -497,6 +496,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     commission=commission,
                     ts_event=self._clock.timestamp_ns(),
                 )
+
+                # Mark as reported AFTER successful fill generation to avoid
+                # permanently losing fills if generate_order_filled raises
+                for ex in new_execs:
+                    state["reported_trades"].add(str(ex.get("executionId")))
 
                 state["last_executed_qty"] = executed_qty
 
