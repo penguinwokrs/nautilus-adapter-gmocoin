@@ -353,8 +353,6 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 self.log.debug(f"ExecutionUpdate duplicate executionId={execution_id}, skipping")
                 return
 
-            state["reported_trades"].add(execution_id)
-
             # Extract fill data from WS executionEvents fields
             exec_price = Decimal(data.get("executionPrice") or data.get("price") or "0")
             exec_size = Decimal(data.get("executionSize") or data.get("size") or "0")
@@ -385,7 +383,9 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 ts_event=self._clock.timestamp_ns(),
             )
 
-            # Update last_executed_qty so OrderUpdate won't double-report
+            # Mark as reported AFTER successful fill generation to avoid
+            # permanently losing fills if generate_order_filled raises
+            state["reported_trades"].add(execution_id)
             state["last_executed_qty"] += exec_size
 
             self.log.info(
@@ -515,9 +515,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
                         venue_order_id=venue_order_id,
                         ts_event=self._clock.timestamp_ns(),
                     )
+                self._order_states.pop(oid_str, None)
                 return True
 
             if status == "EXECUTED":
+                self._order_states.pop(oid_str, None)
                 return True
 
         except Exception as e:
