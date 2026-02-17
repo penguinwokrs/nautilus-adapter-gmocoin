@@ -364,9 +364,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 return
 
             # Extract fill data from WS executionEvents fields
-            exec_price = Decimal(data.get("executionPrice") or data.get("price") or "0")
-            exec_size = Decimal(data.get("executionSize") or data.get("size") or "0")
-            fee = Decimal(data.get("fee") or "0")
+            # Use explicit None checks to avoid falsy 0 values being skipped
+            exec_price = Decimal(data.get("executionPrice") if data.get("executionPrice") is not None else data.get("price", "0"))
+            exec_size = Decimal(data.get("executionSize") if data.get("executionSize") is not None else data.get("size", "0"))
+            fee = Decimal(data.get("fee", "0"))
 
             if exec_size <= 0:
                 self.log.warning(f"ExecutionUpdate with zero size, executionId={execution_id}")
@@ -431,8 +432,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
     async def _process_order_update(self, order: Order, venue_order_id: VenueOrderId, quote_currency, data: dict) -> bool:
         try:
-            status = data.get("orderStatus") or data.get("status")
-            executed_qty = Decimal(data.get("orderExecutedSize") or data.get("executedSize") or "0")
+            status = data.get("orderStatus") if data.get("orderStatus") is not None else data.get("status")
+            executed_qty = Decimal(data.get("orderExecutedSize") if data.get("orderExecutedSize") is not None else data.get("executedSize", "0"))
 
             # Track fill state
             oid_str = str(venue_order_id)
@@ -448,7 +449,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             # Handle fills
             if executed_qty > last_qty:
                 delta = executed_qty - last_qty
-                avg_price = Decimal(data.get("orderPrice") or data.get("price") or "0")
+                avg_price = Decimal(data.get("orderPrice") if data.get("orderPrice") is not None else data.get("price", "0"))
                 commission = Money(Decimal("0"), quote_currency)
 
                 # Try to get detailed execution info
