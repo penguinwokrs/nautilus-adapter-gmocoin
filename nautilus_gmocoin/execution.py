@@ -41,6 +41,9 @@ class GmocoinExecutionClient(LiveExecutionClient):
     Wraps Rust GmocoinExecutionClient for REST orders and Private WebSocket.
     """
 
+    _CLIENT_OID_LOOKUP_RETRIES = 10
+    _CLIENT_OID_LOOKUP_DELAY_S = 0.1
+
     def __init__(self, loop, config: GmocoinExecClientConfig, msgbus, cache, clock, instrument_provider: InstrumentProvider):
         super().__init__(
             loop=loop,
@@ -323,11 +326,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
             # Lookup order via cache
             client_oid = None
-            for _ in range(10):
+            for _ in range(self._CLIENT_OID_LOOKUP_RETRIES):
                 client_oid = self._cache.client_order_id(venue_order_id)
                 if client_oid:
                     break
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(self._CLIENT_OID_LOOKUP_DELAY_S)
 
             if not client_oid:
                 self.log.warning(f"ClientOrderId not found for venue_order_id: {venue_order_id} (ExecutionUpdate)")
@@ -394,7 +397,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             )
 
         except Exception as e:
-            self.log.error(f"Failed to process ExecutionUpdate: {e}")
+            self.log.error(f"Failed to process ExecutionUpdate: {e}", exc_info=True)
 
     def _infer_liquidity_side(self, order: Order) -> LiquiditySide:
         """Infer liquidity side from order type."""
@@ -409,11 +412,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
     async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
         # Retry loop for ClientOrderId lookup (race condition)
         client_oid = None
-        for _ in range(10):
+        for _ in range(self._CLIENT_OID_LOOKUP_RETRIES):
             client_oid = self._cache.client_order_id(venue_order_id)
             if client_oid:
                 break
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self._CLIENT_OID_LOOKUP_DELAY_S)
 
         if not client_oid:
             self._logger.warning(
