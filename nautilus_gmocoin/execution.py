@@ -316,6 +316,26 @@ class GmocoinExecutionClient(LiveExecutionClient):
         except Exception as e:
             self.log.error(f"Failed to process asset update: {e}")
 
+    async def _lookup_order_with_retry(self, venue_order_id: VenueOrderId) -> Optional[Order]:
+        """Lookup order via cache with retries for race condition with order acceptance."""
+        client_oid = None
+        for _ in range(self._CLIENT_OID_LOOKUP_RETRIES):
+            client_oid = self._cache.client_order_id(venue_order_id)
+            if client_oid:
+                break
+            await asyncio.sleep(self._CLIENT_OID_LOOKUP_DELAY_S)
+
+        if not client_oid:
+            self.log.warning(f"ClientOrderId not found for venue_order_id: {venue_order_id} after retries")
+            return None
+
+        order = self._cache.order(client_oid)
+        if not order:
+            self.log.warning(f"Order not found in cache for client_order_id: {client_oid}")
+            return None
+
+        return order
+
     async def _process_execution_update(self, venue_order_id: VenueOrderId, data: dict):
         """Process executionEvents channel WS message with accurate fill data."""
         try:
@@ -324,21 +344,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 self.log.warning("ExecutionUpdate missing executionId, skipping")
                 return
 
-            # Lookup order via cache
-            client_oid = None
-            for _ in range(self._CLIENT_OID_LOOKUP_RETRIES):
-                client_oid = self._cache.client_order_id(venue_order_id)
-                if client_oid:
-                    break
-                await asyncio.sleep(self._CLIENT_OID_LOOKUP_DELAY_S)
-
-            if not client_oid:
-                self.log.warning(f"ClientOrderId not found for venue_order_id: {venue_order_id} (ExecutionUpdate)")
-                return
-
-            order = self._cache.order(client_oid)
+            order = await self._lookup_order_with_retry(venue_order_id)
             if not order:
-                self.log.warning(f"Order not found in cache for client_order_id: {client_oid} (ExecutionUpdate)")
                 return
 
             # Initialize order state
@@ -410,23 +417,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
         return LiquiditySide.NO_LIQUIDITY_SIDE
 
     async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
-        # Retry loop for ClientOrderId lookup (race condition)
-        client_oid = None
-        for _ in range(self._CLIENT_OID_LOOKUP_RETRIES):
-            client_oid = self._cache.client_order_id(venue_order_id)
-            if client_oid:
-                break
-            await asyncio.sleep(self._CLIENT_OID_LOOKUP_DELAY_S)
-
-        if not client_oid:
-            self._logger.warning(
-                f"ClientOrderId not found for venue_order_id: {venue_order_id} after retries."
-            )
-            return
-
-        order = self._cache.order(client_oid)
+        order = await self._lookup_order_with_retry(venue_order_id)
         if not order:
-            self._logger.warning(f"Order not found in cache for client_order_id: {client_oid}")
             return
 
         instrument = self._instrument_provider.find(order.instrument_id)
