@@ -392,7 +392,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 trade_id=TradeId(execution_id),
                 last_qty=exec_size,
                 last_px=exec_price,
-                liquidity=self._infer_liquidity_side(order),
+                liquidity_side=self._infer_liquidity_side(order),
                 commission=commission,
                 ts_event=self._clock.timestamp_ns(),
             )
@@ -492,7 +492,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     trade_id=None,
                     last_qty=delta,
                     last_px=avg_price,
-                    liquidity=self._infer_liquidity_side(order),
+                    liquidity_side=self._infer_liquidity_side(order),
                     commission=commission,
                     ts_event=self._clock.timestamp_ns(),
                 )
