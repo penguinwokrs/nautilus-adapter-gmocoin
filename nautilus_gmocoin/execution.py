@@ -338,7 +338,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         return order
 
-    def _find_instrument(self, instrument_id: InstrumentId):
+    def _find_instrument(self, instrument_id: InstrumentId) -> Optional["Instrument"]:
         """Find instrument from provider or cache."""
         instrument = self._instrument_provider.find(instrument_id)
         if instrument is None:
