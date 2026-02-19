@@ -338,11 +338,16 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         return order
 
+    def _find_instrument(self, instrument_id: InstrumentId):
+        """Find instrument from provider or cache."""
+        instrument = self._instrument_provider.find(instrument_id)
+        if instrument is None:
+            instrument = self._cache.instrument(instrument_id)
+        return instrument
+
     def _get_quote_currency(self, instrument_id: InstrumentId):
         """Find instrument and return its quote currency, falling back to JPY."""
-        instrument = self._instrument_provider.find(instrument_id)
-        if instrument is None and hasattr(self, '_cache'):
-            instrument = self._cache.instrument(instrument_id)
+        instrument = self._find_instrument(instrument_id)
         return JPY if not instrument else instrument.quote_currency
 
     async def _process_execution_update(self, venue_order_id: VenueOrderId, data: dict):
@@ -427,18 +432,16 @@ class GmocoinExecutionClient(LiveExecutionClient):
             return LiquiditySide.MAKER
         return LiquiditySide.NO_LIQUIDITY_SIDE
 
-    def _get_instrument_precisions(self, instrument_id: InstrumentId) -> tuple:
-        """Get quantity and price precision from cached instrument.
+    def _get_instrument_precisions(self, instrument_id: InstrumentId) -> tuple[int, int]:
+        """Get quantity and price precision for an instrument.
 
-        Checks instrument_provider first, then falls back to cache.
+        Uses _find_instrument() to check provider then cache.
         Logs a warning if neither source has the instrument.
 
         Returns:
             Tuple of (qty_precision, px_precision). Defaults to (8, 0) if not found.
         """
-        instrument = self._instrument_provider.find(instrument_id)
-        if instrument is None:
-            instrument = self._cache.instrument(instrument_id)
+        instrument = self._find_instrument(instrument_id)
         if instrument:
             return instrument.size_precision, instrument.price_precision
         self._logger.warning(
