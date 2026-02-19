@@ -383,6 +383,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
             quote_currency = self._get_quote_currency(order.instrument_id)
             commission = Money(fee, quote_currency)
 
+            # Get instrument precision for proper type wrapping
+            instrument = self._cache.instrument(order.instrument_id)
+            qty_precision = instrument.size_precision if instrument else 8
+            px_precision = instrument.price_precision if instrument else 0
+
             self.generate_order_filled(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,
@@ -392,8 +397,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 trade_id=TradeId(execution_id),
                 order_side=order.side,
                 order_type=order.order_type,
-                last_qty=exec_size,
-                last_px=exec_price,
+                last_qty=Quantity(exec_size, precision=qty_precision),
+                last_px=Price(exec_price, precision=px_precision),
                 quote_currency=quote_currency,
                 liquidity_side=self._infer_liquidity_side(order),
                 commission=commission,
@@ -486,6 +491,11 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 except Exception as e:
                     self._logger.warning(f"Failed to fetch execution details: {e}")
 
+                # Get instrument precision for proper type wrapping
+                instrument = self._cache.instrument(order.instrument_id)
+                qty_precision = instrument.size_precision if instrument else 8
+                px_precision = instrument.price_precision if instrument else 0
+
                 self.generate_order_filled(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
@@ -495,8 +505,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     trade_id=None,
                     order_side=order.side,
                     order_type=order.order_type,
-                    last_qty=delta,
-                    last_px=avg_price,
+                    last_qty=Quantity(delta, precision=qty_precision),
+                    last_px=Price(avg_price, precision=px_precision),
                     quote_currency=quote_currency,
                     liquidity_side=self._infer_liquidity_side(order),
                     commission=commission,
