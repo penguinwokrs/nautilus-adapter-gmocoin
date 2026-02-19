@@ -383,10 +383,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             quote_currency = self._get_quote_currency(order.instrument_id)
             commission = Money(fee, quote_currency)
 
-            # Get instrument precision for proper type wrapping
-            instrument = self._cache.instrument(order.instrument_id)
-            qty_precision = instrument.size_precision if instrument else 8
-            px_precision = instrument.price_precision if instrument else 0
+            qty_precision, px_precision = self._get_instrument_precisions(order.instrument_id)
 
             self.generate_order_filled(
                 strategy_id=order.strategy_id,
@@ -427,6 +424,17 @@ class GmocoinExecutionClient(LiveExecutionClient):
         if order.order_type == OrderType.LIMIT:
             return LiquiditySide.MAKER
         return LiquiditySide.NO_LIQUIDITY_SIDE
+
+    def _get_instrument_precisions(self, instrument_id: InstrumentId) -> tuple:
+        """Get quantity and price precision from cached instrument.
+
+        Returns:
+            Tuple of (qty_precision, px_precision). Defaults to (8, 0) if not found.
+        """
+        instrument = self._cache.instrument(instrument_id)
+        if instrument:
+            return instrument.size_precision, instrument.price_precision
+        return 8, 0
 
     async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
         order = await self._lookup_order_with_retry(venue_order_id)
@@ -491,10 +499,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 except Exception as e:
                     self._logger.warning(f"Failed to fetch execution details: {e}")
 
-                # Get instrument precision for proper type wrapping
-                instrument = self._cache.instrument(order.instrument_id)
-                qty_precision = instrument.size_precision if instrument else 8
-                px_precision = instrument.price_precision if instrument else 0
+                qty_precision, px_precision = self._get_instrument_precisions(order.instrument_id)
 
                 self.generate_order_filled(
                     strategy_id=order.strategy_id,
