@@ -43,6 +43,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
     _CLIENT_OID_LOOKUP_RETRIES = 10
     _CLIENT_OID_LOOKUP_DELAY_S = 0.1
+    _DEFAULT_QTY_PRECISION = 8
+    _DEFAULT_PX_PRECISION = 0
 
     def __init__(self, loop, config: GmocoinExecClientConfig, msgbus, cache, clock, instrument_provider: InstrumentProvider):
         super().__init__(
@@ -336,11 +338,19 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
         return order
 
+    def _find_instrument(self, instrument_id: InstrumentId) -> Optional["Instrument"]:
+        """Find instrument from provider or cache."""
+        instrument = self._instrument_provider.find(instrument_id)
+        if instrument is None:
+            try:
+                instrument = self._cache.instrument(instrument_id)
+            except KeyError:
+                instrument = None
+        return instrument
+
     def _get_quote_currency(self, instrument_id: InstrumentId):
         """Find instrument and return its quote currency, falling back to JPY."""
-        instrument = self._instrument_provider.find(instrument_id)
-        if instrument is None and hasattr(self, '_cache'):
-            instrument = self._cache.instrument(instrument_id)
+        instrument = self._find_instrument(instrument_id)
         return JPY if not instrument else instrument.quote_currency
 
     async def _process_execution_update(self, venue_order_id: VenueOrderId, data: dict):
@@ -383,6 +393,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
             quote_currency = self._get_quote_currency(order.instrument_id)
             commission = Money(fee, quote_currency)
 
+            qty_precision, px_precision = self._get_instrument_precisions(order.instrument_id)
+
             self.generate_order_filled(
                 strategy_id=order.strategy_id,
                 instrument_id=order.instrument_id,
@@ -392,8 +404,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 trade_id=TradeId(execution_id),
                 order_side=order.side,
                 order_type=order.order_type,
-                last_qty=exec_size,
-                last_px=exec_price,
+                last_qty=Quantity(exec_size, precision=qty_precision),
+                last_px=Price(exec_price, precision=px_precision),
                 quote_currency=quote_currency,
                 liquidity_side=self._infer_liquidity_side(order),
                 commission=commission,
@@ -422,6 +434,24 @@ class GmocoinExecutionClient(LiveExecutionClient):
         if order.order_type == OrderType.LIMIT:
             return LiquiditySide.MAKER
         return LiquiditySide.NO_LIQUIDITY_SIDE
+
+    def _get_instrument_precisions(self, instrument_id: InstrumentId) -> tuple[int, int]:
+        """Get quantity and price precision for an instrument.
+
+        Uses _find_instrument() to check provider then cache.
+        Logs a warning if neither source has the instrument.
+
+        Returns:
+            Tuple of (qty_precision, px_precision). Defaults to (8, 0) if not found.
+        """
+        instrument = self._find_instrument(instrument_id)
+        if instrument:
+            return instrument.size_precision, instrument.price_precision
+        self._logger.warning(
+            f"Could not find instrument {instrument_id}. "
+            f"Falling back to default precisions (qty={self._DEFAULT_QTY_PRECISION}, px={self._DEFAULT_PX_PRECISION})."
+        )
+        return self._DEFAULT_QTY_PRECISION, self._DEFAULT_PX_PRECISION
 
     async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
         order = await self._lookup_order_with_retry(venue_order_id)
@@ -486,6 +516,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 except Exception as e:
                     self._logger.warning(f"Failed to fetch execution details: {e}")
 
+                qty_precision, px_precision = self._get_instrument_precisions(order.instrument_id)
+
                 self.generate_order_filled(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
@@ -495,8 +527,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     trade_id=None,
                     order_side=order.side,
                     order_type=order.order_type,
-                    last_qty=delta,
-                    last_px=avg_price,
+                    last_qty=Quantity(delta, precision=qty_precision),
+                    last_px=Price(avg_price, precision=px_precision),
                     quote_currency=quote_currency,
                     liquidity_side=self._infer_liquidity_side(order),
                     commission=commission,
