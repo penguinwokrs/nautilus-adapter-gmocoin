@@ -428,12 +428,21 @@ class GmocoinExecutionClient(LiveExecutionClient):
     def _get_instrument_precisions(self, instrument_id: InstrumentId) -> tuple:
         """Get quantity and price precision from cached instrument.
 
+        Checks instrument_provider first, then falls back to cache.
+        Logs a warning if neither source has the instrument.
+
         Returns:
             Tuple of (qty_precision, px_precision). Defaults to (8, 0) if not found.
         """
-        instrument = self._cache.instrument(instrument_id)
+        instrument = self._instrument_provider.find(instrument_id)
+        if instrument is None:
+            instrument = self._cache.instrument(instrument_id)
         if instrument:
             return instrument.size_precision, instrument.price_precision
+        self._logger.warning(
+            f"Could not find instrument {instrument_id}. "
+            f"Falling back to default precisions (qty=8, px=0)."
+        )
         return 8, 0
 
     async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
