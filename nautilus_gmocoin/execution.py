@@ -43,6 +43,8 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
     _CLIENT_OID_LOOKUP_RETRIES = 10
     _CLIENT_OID_LOOKUP_DELAY_S = 0.1
+    _DEFAULT_QTY_PRECISION = 8
+    _DEFAULT_PX_PRECISION = 0
 
     def __init__(self, loop, config: GmocoinExecClientConfig, msgbus, cache, clock, instrument_provider: InstrumentProvider):
         super().__init__(
@@ -441,9 +443,9 @@ class GmocoinExecutionClient(LiveExecutionClient):
             return instrument.size_precision, instrument.price_precision
         self._logger.warning(
             f"Could not find instrument {instrument_id}. "
-            f"Falling back to default precisions (qty=8, px=0)."
+            f"Falling back to default precisions (qty={self._DEFAULT_QTY_PRECISION}, px={self._DEFAULT_PX_PRECISION})."
         )
-        return 8, 0
+        return self._DEFAULT_QTY_PRECISION, self._DEFAULT_PX_PRECISION
 
     async def _process_order_update_from_data(self, venue_order_id: VenueOrderId, data: dict):
         order = await self._lookup_order_with_retry(venue_order_id)
