@@ -342,7 +342,10 @@ class GmocoinExecutionClient(LiveExecutionClient):
         """Find instrument from provider or cache."""
         instrument = self._instrument_provider.find(instrument_id)
         if instrument is None:
-            instrument = self._cache.instrument(instrument_id)
+            try:
+                instrument = self._cache.instrument(instrument_id)
+            except KeyError:
+                instrument = None
         return instrument
 
     def _get_quote_currency(self, instrument_id: InstrumentId):
