@@ -390,6 +390,13 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 self.log.warning(f"ExecutionUpdate with zero size, executionId={execution_id}")
                 return
 
+            if exec_price <= 0:
+                self.log.error(
+                    f"ExecutionUpdate with price={exec_price}, executionId={execution_id}. "
+                    f"Skipping corrupted fill to prevent position corruption."
+                )
+                return
+
             quote_currency = self._get_quote_currency(order.instrument_id)
             commission = Money(fee, quote_currency)
 
@@ -518,22 +525,29 @@ class GmocoinExecutionClient(LiveExecutionClient):
 
                 qty_precision, px_precision = self._get_instrument_precisions(order.instrument_id)
 
-                self.generate_order_filled(
-                    strategy_id=order.strategy_id,
-                    instrument_id=order.instrument_id,
-                    client_order_id=order.client_order_id,
-                    venue_order_id=venue_order_id,
-                    venue_position_id=None,
-                    trade_id=None,
-                    order_side=order.side,
-                    order_type=order.order_type,
-                    last_qty=Quantity(delta, precision=qty_precision),
-                    last_px=Price(avg_price, precision=px_precision),
-                    quote_currency=quote_currency,
-                    liquidity_side=self._infer_liquidity_side(order),
-                    commission=commission,
-                    ts_event=self._clock.timestamp_ns(),
-                )
+                if avg_price <= 0:
+                    self._logger.error(
+                        f"OrderUpdate with avg_price={avg_price}, "
+                        f"venue_order_id={venue_order_id}. "
+                        f"Skipping corrupted fill to prevent position corruption."
+                    )
+                else:
+                    self.generate_order_filled(
+                        strategy_id=order.strategy_id,
+                        instrument_id=order.instrument_id,
+                        client_order_id=order.client_order_id,
+                        venue_order_id=venue_order_id,
+                        venue_position_id=None,
+                        trade_id=None,
+                        order_side=order.side,
+                        order_type=order.order_type,
+                        last_qty=Quantity(delta, precision=qty_precision),
+                        last_px=Price(avg_price, precision=px_precision),
+                        quote_currency=quote_currency,
+                        liquidity_side=self._infer_liquidity_side(order),
+                        commission=commission,
+                        ts_event=self._clock.timestamp_ns(),
+                    )
 
                 # Mark as reported AFTER successful fill generation to avoid
                 # permanently losing fills if generate_order_filled raises
@@ -617,6 +631,13 @@ class GmocoinExecutionClient(LiveExecutionClient):
         price_str = order_data.get("price")
         price = Price(Decimal(price_str), precision=0) if price_str else None
 
+        # For filled orders, set avg_px to prevent ExecEngine from
+        # generating inferred fills with price=0 (#870).
+        # LIMIT orders: avg_px = order price (exact fill).
+        # MARKET orders without price: avg_px remains None — NautilusTrader
+        # will use FillReports to infer the price.
+        avg_px = price if (price is not None and executed_size > 0) else None
+
         if instrument_id is None:
             symbol = order_data.get("symbol", "BTC")
             instrument_id = InstrumentId(Symbol(f"{symbol}/JPY"), self.venue)
@@ -633,6 +654,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             order_status=order_status,
             quantity=Quantity(size, precision=8),
             filled_qty=Quantity(executed_size, precision=8),
+            avg_px=avg_px,
             report_id=UUID4(),
             ts_accepted=ts_now,
             ts_last=ts_now,
@@ -833,6 +855,13 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 exec_size = Decimal(exec_data.get("size", "0"))
                 exec_price = Decimal(exec_data.get("price", "0"))
                 fee = Decimal(exec_data.get("fee", "0"))
+
+                if exec_price <= 0:
+                    self._logger.warning(
+                        f"Skipping fill report with price={exec_price}: "
+                        f"executionId={exec_data.get('executionId')}"
+                    )
+                    continue
 
                 symbol = exec_data.get("symbol", "BTC")
                 inst_id = instrument_id or InstrumentId(Symbol(f"{symbol}/JPY"), Venue("GMOCOIN"))
