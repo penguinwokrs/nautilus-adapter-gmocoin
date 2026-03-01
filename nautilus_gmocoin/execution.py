@@ -634,9 +634,17 @@ class GmocoinExecutionClient(LiveExecutionClient):
         # For filled orders, set avg_px to prevent ExecEngine from
         # generating inferred fills with price=0 (#870).
         # LIMIT orders: avg_px = order price (exact fill).
-        # MARKET orders without price: avg_px remains None — NautilusTrader
-        # will use FillReports to infer the price.
-        avg_px = price if (price is not None and executed_size > 0) else None
+        # MARKET orders or orders with non-positive price: avg_px remains None —
+        # NautilusTrader will use FillReports to infer the price.
+        avg_px = None
+        if price is not None and executed_size > 0:
+            if float(price) > 0:
+                avg_px = price
+            else:
+                self._log.warning(
+                    f"Order report for venue_order_id={venue_oid} has non-positive price={price}. "
+                    f"Not setting avg_px to prevent a price=0 fill."
+                )
 
         if instrument_id is None:
             symbol = order_data.get("symbol", "BTC")
