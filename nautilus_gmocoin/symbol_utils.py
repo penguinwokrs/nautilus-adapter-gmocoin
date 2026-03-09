@@ -1,7 +1,7 @@
 """Utility for extracting GMO Coin base/quote symbols from NautilusTrader symbol values."""
 
 # Known quote currencies on GMO Coin (sorted longest-first to avoid suffix ambiguity)
-_QUOTE_CURRENCIES = sorted(("JPY", "USDT", "USD", "BTC"), key=len, reverse=True)
+_QUOTE_CURRENCIES = tuple(sorted(("JPY", "USDT", "USD", "BTC"), key=len, reverse=True))
 
 
 def extract_gmo_symbol(symbol_value: str) -> str:
