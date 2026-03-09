@@ -21,9 +21,19 @@ from nautilus_gmocoin.symbol_utils import extract_gmo_symbol
         ("ETHJPY", "ETH"),
         ("DOGEJPY", "DOGE"),
         ("BTCUSDT", "BTC"),
+        # Lowercase slash format
+        ("btc/jpy", "BTC"),
+        ("sol/jpy", "SOL"),
+        # Lowercase compact format
+        ("soljpy", "SOL"),
+        ("btcjpy", "BTC"),
+        # Mixed case
+        ("Btc/Jpy", "BTC"),
+        ("BtcJpy", "BTC"),
         # Edge: already base only
         ("BTC", "BTC"),
         ("SOL", "SOL"),
+        ("sol", "SOL"),
     ],
 )
 def test_extract_gmo_symbol(input_val: str, expected: str):

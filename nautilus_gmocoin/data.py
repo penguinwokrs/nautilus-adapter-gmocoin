@@ -475,7 +475,7 @@ class GmocoinDataClient(LiveMarketDataClient):
                     else:
                         native_symbol = instrument_id_str
 
-                    base = extract_gmo_symbol(native_symbol).upper()
+                    base = extract_gmo_symbol(native_symbol)
                     quote = native_symbol.split("/")[1].upper() if "/" in native_symbol else "JPY"
 
                     info = symbols_map.get(base)

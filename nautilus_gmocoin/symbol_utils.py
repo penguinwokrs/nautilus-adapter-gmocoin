@@ -22,10 +22,10 @@ def extract_gmo_symbol(symbol_value: str) -> str:
         The base currency, e.g. ``"BTC"``, ``"SOL"``.
     """
     if "/" in symbol_value:
-        return symbol_value.split("/")[0]
+        return symbol_value.split("/")[0].upper()
     # Compact / catalog format: strip known quote currency suffix
     upper = symbol_value.upper()
     for qc in _QUOTE_CURRENCIES:
         if upper.endswith(qc) and len(upper) > len(qc):
             return upper[: -len(qc)]
-    return symbol_value
+    return upper
