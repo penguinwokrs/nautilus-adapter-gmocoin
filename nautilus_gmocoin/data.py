@@ -10,6 +10,7 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.identifiers import ClientId, Venue
 from .config import GmocoinDataClientConfig
 from .constants import BAR_SPEC_TO_GMO_INTERVAL, BAR_POLL_INTERVALS
+from .symbol_utils import extract_gmo_symbol
 
 try:
     from . import _nautilus_gmocoin as gmocoin
@@ -79,8 +80,8 @@ class GmocoinDataClient(LiveMarketDataClient):
     async def subscribe(self, instruments: List[Instrument]):
         for instrument in instruments:
             symbol = instrument.id.symbol
-            # "BTC/JPY" -> "BTC"
-            gmo_symbol = symbol.value.split("/")[0]
+            # "BTC/JPY" -> "BTC", "BTCJPY" -> "BTC"
+            gmo_symbol = extract_gmo_symbol(symbol.value)
             self._subscribed_instruments[gmo_symbol] = instrument
 
             # Subscribe to all channels for this symbol
@@ -318,7 +319,7 @@ class GmocoinDataClient(LiveMarketDataClient):
             return
 
         instrument_id = bar_type.instrument_id
-        gmo_symbol = instrument_id.symbol.value.split("/")[0]
+        gmo_symbol = extract_gmo_symbol(instrument_id.symbol.value)
         poll_interval = BAR_POLL_INTERVALS.get(gmo_interval, 60)
 
         self._logger.info(
@@ -474,7 +475,7 @@ class GmocoinDataClient(LiveMarketDataClient):
                     else:
                         native_symbol = instrument_id_str
 
-                    base = native_symbol.split("/")[0].upper()
+                    base = extract_gmo_symbol(native_symbol).upper()
                     quote = native_symbol.split("/")[1].upper() if "/" in native_symbol else "JPY"
 
                     info = symbols_map.get(base)
