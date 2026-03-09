@@ -4,6 +4,8 @@ import logging
 from typing import Dict, List, Optional
 from decimal import Decimal
 
+from .symbol_utils import extract_gmo_symbol
+
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.model.orders import Order
@@ -89,6 +91,20 @@ class GmocoinExecutionClient(LiveExecutionClient):
     def account_id(self) -> AccountId:
         return self._account_id
 
+    def _collect_symbols(self, instrument_id=None) -> set[str]:
+        """Collect GMO base-currency symbols to query.
+
+        If *instrument_id* is given, returns a set with just that symbol.
+        Otherwise iterates the instrument provider for all known instruments.
+        """
+        symbols: set[str] = set()
+        if instrument_id:
+            symbols.add(extract_gmo_symbol(instrument_id.symbol.value))
+        else:
+            for inst in self._instrument_provider.get_all().values():
+                symbols.add(extract_gmo_symbol(inst.id.symbol.value))
+        return symbols
+
     async def _connect(self):
         # Register all currencies
         await self._register_all_currencies()
@@ -122,7 +138,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
             order = command.order
             instrument_id = order.instrument_id
             # "BTC/JPY" -> "BTC" for GMO Coin
-            gmo_symbol = instrument_id.symbol.value.split("/")[0]
+            gmo_symbol = extract_gmo_symbol(instrument_id.symbol.value)
 
             side = "BUY" if order.side == OrderSide.BUY else "SELL"
 
@@ -193,7 +209,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                 return
 
             instrument_id = command.instrument_id
-            gmo_symbol = instrument_id.symbol.value.split("/")[0]
+            gmo_symbol = extract_gmo_symbol(instrument_id.symbol.value)
 
             await self._rust_client.cancel_order(
                 gmo_symbol,
@@ -704,14 +720,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
         reports = []
         try:
             instrument_id = command.instrument_id
-            # Determine which symbols to query
-            symbols = set()
-            if instrument_id:
-                symbols.add(instrument_id.symbol.value.split("/")[0])
-            else:
-                for inst in self._instrument_provider.get_all().values() if hasattr(self._instrument_provider.get_all, 'values') else self._instrument_provider.get_all():
-                    symbols.add(inst.id.symbol.value.split("/")[0])
-
+            symbols = self._collect_symbols(instrument_id)
             if not symbols:
                 symbols.add("BTC")
 
@@ -826,13 +835,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
                     self._logger.warning(f"Failed to fetch executions for order {venue_order_id}: {e}")
                 return reports
 
-            symbols = set()
-            if instrument_id:
-                symbols.add(instrument_id.symbol.value.split("/")[0])
-            else:
-                for inst in self._instrument_provider.get_all().values() if hasattr(self._instrument_provider.get_all, 'values') else self._instrument_provider.get_all():
-                    symbols.add(inst.id.symbol.value.split("/")[0])
-
+            symbols = self._collect_symbols(instrument_id)
             if not symbols:
                 symbols.add("BTC")
 
@@ -904,13 +907,7 @@ class GmocoinExecutionClient(LiveExecutionClient):
         reports = []
         try:
             instrument_id = command.instrument_id
-            symbols = set()
-            if instrument_id:
-                symbols.add(instrument_id.symbol.value.split("/")[0])
-            else:
-                for inst in self._instrument_provider.get_all().values() if hasattr(self._instrument_provider.get_all, 'values') else self._instrument_provider.get_all():
-                    symbols.add(inst.id.symbol.value.split("/")[0])
-
+            symbols = self._collect_symbols(instrument_id)
             if not symbols:
                 return reports
 
