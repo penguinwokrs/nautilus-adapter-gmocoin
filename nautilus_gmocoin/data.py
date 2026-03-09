@@ -10,7 +10,7 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.identifiers import ClientId, Venue
 from .config import GmocoinDataClientConfig
 from .constants import BAR_SPEC_TO_GMO_INTERVAL, BAR_POLL_INTERVALS
-from .symbol_utils import extract_gmo_symbol
+from .symbol_utils import extract_gmo_symbol, extract_quote_currency
 
 try:
     from . import _nautilus_gmocoin as gmocoin
@@ -476,7 +476,7 @@ class GmocoinDataClient(LiveMarketDataClient):
                         native_symbol = instrument_id_str
 
                     base = extract_gmo_symbol(native_symbol)
-                    quote = native_symbol.split("/")[1].upper() if "/" in native_symbol else "JPY"
+                    quote = extract_quote_currency(native_symbol)
 
                     info = symbols_map.get(base)
                     if info:
